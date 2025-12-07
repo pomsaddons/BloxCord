@@ -13,4 +13,8 @@
     <PackageReference Include="SocketIOClient" Version="3.1.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="rochatlogo.png" />
+  </ItemGroup>
+
 </Project>

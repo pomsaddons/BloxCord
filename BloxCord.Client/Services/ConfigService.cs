@@ -8,9 +8,9 @@ public class AppConfig
     public string BackendUrl { get; set; } = "https://rochat.pompompurin.tech";
     public string Username { get; set; } = string.Empty;
     public bool UseGradient { get; set; } = true;
-    public string SolidColor { get; set; } = "#020617";
-    public string GradientStart { get; set; } = "#050505";
-    public string GradientEnd { get; set; } = "#E5E5E5";
+    public string SolidColor { get; set; } = "#0F172A";
+    public string GradientStart { get; set; } = "#0F172A";
+    public string GradientEnd { get; set; } = "#334155";
 }
 
 public static class ConfigService

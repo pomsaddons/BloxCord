@@ -530,11 +530,12 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    // Use roblox-player: protocol
+                    // Use browser URL to ensure authentication
                     var placeId = game.PlaceId;
                     var targetJobId = game.Servers.FirstOrDefault(s => s.JobId == (string)btn.Tag)?.JobId ?? (string)btn.Tag;
 
-                    var url = $"roblox-player:1+launchmode:play+placeId:{placeId}+gameId:{targetJobId}";
+                    // https://www.roblox.com/games/start?placeId=<ID>&gameId=<JOBID>
+                    var url = $"https://www.roblox.com/games/start?placeId={placeId}&gameId={targetJobId}";
                     
                     System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                     {

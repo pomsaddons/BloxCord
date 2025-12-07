@@ -8,6 +8,7 @@
         Title="RoChat"
         Height="720"
         Width="1100"
+        Icon="rochatlogo.png"
         WindowStartupLocation="CenterScreen"
         Background="#020617"
         Foreground="White"
@@ -19,9 +20,8 @@
     </WindowChrome.WindowChrome>
     <Window.Resources>
         <LinearGradientBrush x:Key="AppBackground" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#050505" Offset="0" />
-            <GradientStop Color="#1C1C1C" Offset="0.45" />
-            <GradientStop Color="#E5E5E5" Offset="1" />
+            <GradientStop Color="#0F172A" Offset="0" />
+            <GradientStop Color="#334155" Offset="1" />
         </LinearGradientBrush>
         <SolidColorBrush x:Key="CardBrush" Color="#0F0F0F" />
         <SolidColorBrush x:Key="CardAccent" Color="#1A1A1A" />
@@ -127,6 +127,7 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Margin="12,0">
+                <Image Source="rochatlogo.png" Width="16" Height="16" Margin="0,0,8,0" VerticalAlignment="Center"/>
                 <TextBlock Text="RoChat" VerticalAlignment="Center" Foreground="#888" FontSize="12" FontWeight="SemiBold"/>
             </StackPanel>
             <StackPanel Grid.Column="2" Orientation="Horizontal" WindowChrome.IsHitTestVisibleInChrome="True">

@@ -1,8 +1,6 @@
 # BloxCord
 
 A lightweight chat stack that creates one SignalR channel per Roblox jobId.
-
-(this is actually renamed to rochat now so you can say it in the normal roblox chat this documentation IS WAYYY out of date the entire backend is in TS now)
 ## Projects
 
 | Project | Description |
@@ -43,6 +41,5 @@ A lightweight chat stack that creates one SignalR channel per Roblox jobId.
 - Typing notifications flow through the new `NotifyTyping` hub method and `TypingIndicator` broadcast. The client shows "typing..." hints inline plus badges on the participant list.
 - The client relies on `RobloxLogParser.TryReadLatestAsync` and `RobloxUserDirectory.TryGetUsernameAsync` to reproduce the same jobId/username discovery approach that Bloxstrap already uses, and `RobloxAvatarDirectory.TryGetHeadshotUrlAsync` to keep the rounded dark UI stocked with Roblox profile pictures.
 - Swagger UI is available at `http://localhost:5158/swagger` for quick testing.
-
 
 
