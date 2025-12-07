@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using SocketIOClient;
 using BloxCord.Client.Models;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace BloxCord.Client.Services;
 
@@ -45,7 +46,12 @@ public sealed class ChatClient : IAsyncDisposable
         _jobId = jobId;
         _userId = userId;
 
-        _socket = new SocketIOClient.SocketIO(BackendUrl);
+        _socket = new SocketIOClient.SocketIO(BackendUrl, new SocketIOOptions
+        {
+            Reconnection = true,
+            ReconnectionDelay = 1000,
+            ReconnectionAttempts = int.MaxValue
+        });
 
         _socket.On("receiveMessage", response =>
         {
@@ -74,9 +80,34 @@ public sealed class ChatClient : IAsyncDisposable
 
         _socket.On("gamesList", response =>
         {
-            var games = response.GetValue<List<GameDto>>();
-            GamesListReceived?.Invoke(this, games);
+            try
+            {
+                var games = response.GetValue<List<GameDto>>();
+                if (games != null)
+                {
+                    GamesListReceived?.Invoke(this, games);
+                }
+            }
+            catch
+            {
+                // Ignore deserialization errors
+            }
         });
+
+        _socket.OnReconnected += async (sender, e) =>
+        {
+            if (!string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_jobId))
+            {
+                // Wait a bit to ensure socket is ready
+                await Task.Delay(500);
+                await _socket.EmitAsync("joinChannel", new
+                {
+                    jobId = _jobId,
+                    username = _username,
+                    userId = _userId
+                });
+            }
+        };
 
         await _socket.ConnectAsync();
 
@@ -93,7 +124,12 @@ public sealed class ChatClient : IAsyncDisposable
     {
         if (_socket is null || !_socket.Connected)
         {
-            _socket = new SocketIOClient.SocketIO(BackendUrl);
+            _socket = new SocketIOClient.SocketIO(BackendUrl, new SocketIOOptions
+            {
+                Reconnection = true,
+                ReconnectionDelay = 1000,
+                ReconnectionAttempts = int.MaxValue
+            });
             _socket.On("gamesList", response =>
             {
                 var games = response.GetValue<List<GameDto>>();
@@ -152,7 +188,10 @@ public sealed class ChatClient : IAsyncDisposable
 
     private class ParticipantsChangedDto
     {
+        [JsonPropertyName("jobId")]
         public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("participants")]
         public List<ChannelParticipantDto> Participants { get; set; } = new();
     }
 }

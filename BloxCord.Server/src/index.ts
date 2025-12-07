@@ -15,11 +15,14 @@ const io = new Server(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    pingTimeout: 60000,
+    pingInterval: 25000
 });
 
 const registry = new ChannelRegistry();
 const avatarService = new RobloxAvatarService();
+const disconnectTimeouts = new Map<string, any>();
 
 io.on('connection', (socket: Socket) => {
     console.log('A user connected:', socket.id);
@@ -27,6 +30,25 @@ io.on('connection', (socket: Socket) => {
     socket.on('joinChannel', async (data: { jobId: string, username: string, userId?: number, placeId?: number }) => {
         const { jobId, username, userId, placeId } = data;
         if (!jobId || !username) return;
+
+        const previousJobId = (socket as any).jobId;
+        const previousUsername = (socket as any).username;
+
+        if (previousJobId && previousUsername && (previousJobId !== jobId || previousUsername !== username)) {
+            registry.removeParticipant(previousJobId, previousUsername);
+            socket.leave(previousJobId);
+            
+            io.to(previousJobId).emit('participantsChanged', {
+                jobId: previousJobId,
+                participants: registry.getParticipants(previousJobId)
+            });
+        }
+
+        const key = `${jobId}:${username}`;
+        if (disconnectTimeouts.has(key)) {
+            clearTimeout(disconnectTimeouts.get(key));
+            disconnectTimeouts.delete(key);
+        }
 
         let avatarUrl: string | undefined = undefined;
         if (userId) {
@@ -73,12 +95,12 @@ io.on('connection', (socket: Socket) => {
                         format: 'Png',
                         isCircular: false
                     }
-                }).catch(e => null);
+                }).catch((e: any) => null);
 
                 // Start fetching universe IDs
                 const universePromises = placeIds.map(pid => 
                     axios.get(`https://apis.roblox.com/universes/v1/places/${pid}/universe`)
-                        .then(res => ({ placeId: pid, universeId: res.data.universeId }))
+                        .then((res: any) => ({ placeId: pid, universeId: res.data.universeId }))
                         .catch(() => null)
                 );
 
@@ -99,7 +121,7 @@ io.on('connection', (socket: Socket) => {
                 }
 
                 // Process Universe IDs and fetch Game Names
-                const validMappings = universeResults.filter(r => r !== null) as { placeId: number, universeId: number }[];
+                const validMappings = universeResults.filter((r: any) => r !== null) as { placeId: number, universeId: number }[];
                 const universeIds = [...new Set(validMappings.map(m => m.universeId))];
 
                 if (universeIds.length > 0) {
@@ -180,18 +202,28 @@ io.on('connection', (socket: Socket) => {
         const username = (socket as any).username;
 
         if (jobId && username) {
-            registry.removeParticipant(jobId, username);
-            registry.setTypingState(jobId, username, false);
+            const key = `${jobId}:${username}`;
+            if (disconnectTimeouts.has(key)) {
+                clearTimeout(disconnectTimeouts.get(key));
+            }
 
-            io.to(jobId).emit('participantsChanged', {
-                jobId,
-                participants: registry.getParticipants(jobId)
-            });
+            const timeout = setTimeout(() => {
+                registry.removeParticipant(jobId, username);
+                registry.setTypingState(jobId, username, false);
 
-            io.to(jobId).emit('typingIndicator', {
-                jobId,
-                usernames: registry.getTypingParticipants(jobId)
-            });
+                io.to(jobId).emit('participantsChanged', {
+                    jobId,
+                    participants: registry.getParticipants(jobId)
+                });
+
+                io.to(jobId).emit('typingIndicator', {
+                    jobId,
+                    usernames: registry.getTypingParticipants(jobId)
+                });
+                disconnectTimeouts.delete(key);
+            }, 5000);
+
+            disconnectTimeouts.set(key, timeout);
         }
         console.log('User disconnected:', socket.id);
     });

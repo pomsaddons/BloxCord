@@ -18,6 +18,7 @@ export class ChannelRegistry {
 
         for (const channel of this.channels.values()) {
             if (!channel.placeId) continue;
+            if (channel.getParticipants().length === 0) continue;
 
             if (!games.has(channel.placeId)) {
                 games.set(channel.placeId, {
@@ -52,6 +53,9 @@ export class ChannelRegistry {
         const channel = this.channels.get(jobId);
         if (channel) {
             channel.removeParticipant(username);
+            if (channel.getParticipants().length === 0) {
+                this.channels.delete(jobId);
+            }
         }
     }
 

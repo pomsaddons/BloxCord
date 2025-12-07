@@ -485,6 +485,8 @@ public partial class MainWindow : Window
 
     private void OnGamesListReceived(object? sender, List<GameDto> games)
     {
+        if (games is null) return;
+
         Dispatcher.Invoke(() =>
         {
             _viewModel.Games.Clear();
