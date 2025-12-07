@@ -1,6 +1,7 @@
 # RoChat
 
 A modern, lightweight chat client for Roblox servers. RoChat allows you to chat with other players in the same server instance without being in the game itself.
+The default instance is rochat.pompompurin.tech
 
 ![RoChat Logo](BloxCord.Client/rochatlogo.png)
 
@@ -68,5 +69,6 @@ The client creates a `config.json` file on first run. You can modify it to chang
 ## Disclaimer
 
 RoChat is a third-party application and is not affiliated with Roblox Corporation. Chat is unmoderated; please use caution when sharing personal information.
+
 
 
