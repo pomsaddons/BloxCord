@@ -1,45 +1,72 @@
-# BloxCord
+# RoChat
 
-A lightweight chat stack that creates one SignalR channel per Roblox jobId.
+A modern, lightweight chat client for Roblox servers. RoChat allows you to chat with other players in the same server instance without being in the game itself.
+
+![RoChat Logo](BloxCord.Client/rochatlogo.png)
+
+## Features
+
+*   **Server Browser:** View active games and server instances with live player counts and avatars.
+*   **Instance Chat:** Connect to a specific server instance (`JobId`) and chat with other RoChat users in that server.
+*   **Roblox Integration:** Automatically detects your current Roblox session from local logs.
+*   **Modern UI:** Sleek, dark-themed WPF interface with customizable gradients and solid colors.
+*   **Safety First:** Includes unmoderated chat warnings and browser-based game launching for security.
+*   **Cross-Platform Backend:** Powered by a Node.js/Socket.IO server.
+
 ## Projects
 
 | Project | Description |
 | --- | --- |
-| `BloxCord.Api` | ASP.NET Core (net8.0) backend with `/api/channels` REST endpoints and `/hubs/chat` SignalR hub. Keeps in-memory channel/participant state indexed by jobId. |
-| `BloxCord.Client` | WPF (net9.0-windows) desktop client. Reads `%LOCALAPPDATA%\Roblox\logs` to grab jobId + userId the same way as `Bloxstrap/Integrations/ActivityWatcher.cs`, resolves the username via `https://users.roblox.com/v1/users/{id}` (as seen in `Bloxstrap/Models/Entities/UserDetails.cs`), fetches avatar headshots from the Roblox thumbnails API, and connects to the backend via SignalR. |
+| `BloxCord.Client` | **RoChat Client**. A .NET 9 WPF desktop application. It parses Roblox logs to find your current game, connects to the backend via Socket.IO, and provides a rich UI for chatting and browsing servers. |
+| `BloxCord.Server` | **Backend Server**. A Node.js application using Socket.IO to manage chat rooms (channels), handle messaging, and fetch game details from the Roblox API. |
 
 ## Prerequisites
 
-- .NET SDK 9.0.300 (ships with .NET 8 target packs and WPF tooling)
-- Roblox installed locally so `%LOCALAPPDATA%/Roblox/logs` exists when parsing sessions
+*   **Client:** .NET 9 SDK (Windows only for WPF).
+*   **Server:** Node.js (v18+).
+*   **Roblox:** Installed locally to detect active sessions.
 
 ## Build & Run
 
+### 1. Start the Backend Server
+
 ```powershell
-# Restore + build everything
- dotnet build BloxCord.sln
+cd BloxCord.Server
+npm install
+npm start
+```
+*The server runs on port 5158 by default.*
 
-# Start the chat backend on http://localhost:5158
- dotnet run --project BloxCord.Api
+### 2. Run the Client
 
-# In a new terminal, launch the WPF client
- dotnet run --project BloxCord.Client
+```powershell
+dotnet run --project BloxCord.Client/BloxCord.Client.csproj
 ```
 
-## Using the app
+## Configuration
 
-1. Launch a Roblox experience so that a fresh `Player` log is produced.
-2. In the WPF app, click **Load Roblox Session**. The app reuses Bloxstrap's regex patterns to find the latest `! Joining game ...` entry for the jobId and the `universeid:...userid:...` entry for the userId, then calls the Roblox Users API to obtain your username.
-3. Review/edit the backend URL (defaults to `http://localhost:5158`), username, or jobId if needed.
-4. Click **Connect** to create/join the jobId channel. Every participant in the same jobId shares the stream; **Send** broadcasts to everyone connected to that channel.
-5. Use **Disconnect** to leave the SignalR group.
+The client creates a `config.json` file on first run. You can modify it to change themes or the backend URL.
 
-## Implementation notes
+```json
+{
+  "BackendUrl": "https://rochat.pompompurin.tech",
+  "Username": "",
+  "UseGradient": true,
+  "SolidColor": "#0F172A",
+  "GradientStart": "#0F172A",
+  "GradientEnd": "#334155"
+}
+```
 
-- Channel state lives in-memory via `ChannelRegistry`; history is capped at 200 messages.
-- Each SignalR connection calls `JoinChannel`, which mirrors the REST call to `/api/channels`. The hub emits `ChannelSnapshot`, `ParticipantsChanged`, and `ReceiveMessage` events.
-- Typing notifications flow through the new `NotifyTyping` hub method and `TypingIndicator` broadcast. The client shows "typing..." hints inline plus badges on the participant list.
-- The client relies on `RobloxLogParser.TryReadLatestAsync` and `RobloxUserDirectory.TryGetUsernameAsync` to reproduce the same jobId/username discovery approach that Bloxstrap already uses, and `RobloxAvatarDirectory.TryGetHeadshotUrlAsync` to keep the rounded dark UI stocked with Roblox profile pictures.
-- Swagger UI is available at `http://localhost:5158/swagger` for quick testing.
+## Usage
+
+1.  **Launch RoChat.**
+2.  **Browse Games:** Use the "Browse" button to see active games where other RoChat users are chatting.
+3.  **Join a Chat:** Click on a server instance to join its chat room. You can also click "Join Server" to launch Roblox and join that specific server.
+4.  **Automatic Connection:** If you are already playing Roblox, click "Connect" on the main screen to automatically detect your current game and join the chat.
+
+## Disclaimer
+
+RoChat is a third-party application and is not affiliated with Roblox Corporation. Chat is unmoderated; please use caution when sharing personal information.
 
 
