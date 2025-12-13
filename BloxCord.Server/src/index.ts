@@ -100,8 +100,8 @@ io.on('connection', (socket: Socket) => {
     });
 
     socket.on('getGames', async () => {
-        // Filter out negative Job IDs (DMs)
-        const games = registry.getGames().filter(g => !g.jobId.startsWith('-'));
+        // Filter out negative Job IDs (DMs) - handled in registry
+        const games = registry.getGames();
         const placeIds = [...new Set(games.map(g => g.placeId))];
 
         if (placeIds.length > 0) {

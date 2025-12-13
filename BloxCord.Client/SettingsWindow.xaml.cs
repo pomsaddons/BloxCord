@@ -64,6 +64,7 @@ public partial class SettingsWindow : Window
             _viewModel.JobId = session.JobId;
             _viewModel.UserId = session.UserId?.ToString() ?? string.Empty;
             _viewModel.SessionUserId = session.UserId;
+            _viewModel.PlaceId = session.PlaceId; // Ensure PlaceId is updated
             _viewModel.StatusMessage = "Session info loaded from Roblox logs.";
         }
         catch (Exception ex)
