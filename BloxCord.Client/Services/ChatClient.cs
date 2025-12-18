@@ -14,6 +14,11 @@ public sealed class ChatClient : IAsyncDisposable
     private string? _jobId;
     private string? _username;
     private long? _userId;
+    private string? _token;
+
+    private string? _countryCode;
+    private string? _preferredLanguage;
+    private string? _dmPublicKey;
 
     public ChatClient(string backendUrl)
     {
@@ -33,13 +38,23 @@ public sealed class ChatClient : IAsyncDisposable
     public string BackendUrl { get; }
 
     public event EventHandler<ChatMessageDto>? MessageReceived;
+    public event EventHandler<ChatMessageDto>? MessageUpdated;
     public event EventHandler<List<ChannelParticipantDto>>? ParticipantsChanged;
     public event EventHandler<List<ChatMessageDto>>? HistoryReceived;
     public event EventHandler<TypingIndicatorDto>? TypingIndicatorReceived;
     public event EventHandler<PrivateMessageDto>? PrivateMessageReceived;
     public event EventHandler<List<ChannelParticipantDto>>? SearchResultsReceived;
+    public event EventHandler<PinVoteUpdateDto>? PinVoteStateReceived;
+    public event EventHandler<KickVoteUpdateDto>? KickVoteStateReceived;
+    public event EventHandler<PinnedMessageChangedDto>? PinnedMessageChanged;
+    public event EventHandler<KickedDto>? Kicked;
+    public event EventHandler<LanguageChangedDto>? LanguageChanged;
+    public event EventHandler<LanguageVoteStateDto>? LanguageVoteStateReceived;
+    public event EventHandler<TokenMintedDto>? TokenMinted;
+    public event EventHandler<BannedDto>? Banned;
+    public event EventHandler<AuthFailedDto>? AuthFailed;
 
-    public async Task ConnectAsync(string username, string jobId, long? userId, long? placeId, CancellationToken cancellationToken = default)
+    public async Task ConnectAsync(string username, string jobId, long? userId, long? placeId, string? countryCode = null, string? preferredLanguage = null, string? dmPublicKey = null, string? token = null, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(username);
         ArgumentException.ThrowIfNullOrWhiteSpace(jobId);
@@ -47,6 +62,11 @@ public sealed class ChatClient : IAsyncDisposable
         _username = username;
         _jobId = jobId;
         _userId = userId;
+        _token = token;
+
+        _countryCode = countryCode;
+        _preferredLanguage = preferredLanguage;
+        _dmPublicKey = dmPublicKey;
 
         _socket = new SocketIOClient.SocketIO(BackendUrl, new SocketIOOptions
         {
@@ -67,6 +87,12 @@ public sealed class ChatClient : IAsyncDisposable
             MessageReceived?.Invoke(this, message);
         });
 
+        _socket.On("messageUpdated", response =>
+        {
+            var message = response.GetValue<ChatMessageDto>();
+            MessageUpdated?.Invoke(this, message);
+        });
+
         _socket.On("participantsChanged", response =>
         {
             var data = response.GetValue<ParticipantsChangedDto>();
@@ -78,6 +104,52 @@ public sealed class ChatClient : IAsyncDisposable
             var snapshot = response.GetValue<ChannelSnapshotDto>();
             HistoryReceived?.Invoke(this, snapshot.History ?? new List<ChatMessageDto>());
             ParticipantsChanged?.Invoke(this, snapshot.Participants ?? new List<ChannelParticipantDto>());
+
+            if (!string.IsNullOrWhiteSpace(snapshot.LanguageCode))
+            {
+                LanguageChanged?.Invoke(this, new LanguageChangedDto { JobId = snapshot.JobId, LanguageCode = snapshot.LanguageCode! });
+            }
+
+            if (!string.IsNullOrWhiteSpace(snapshot.PinnedMessageId))
+            {
+                PinnedMessageChanged?.Invoke(this, new PinnedMessageChangedDto { JobId = snapshot.JobId, PinnedMessageId = snapshot.PinnedMessageId });
+            }
+        });
+
+        _socket.On("languageChanged", response =>
+        {
+            var payload = response.GetValue<LanguageChangedDto>();
+            LanguageChanged?.Invoke(this, payload);
+        });
+
+        _socket.On("languageVoteState", response =>
+        {
+            var payload = response.GetValue<LanguageVoteStateDto>();
+            LanguageVoteStateReceived?.Invoke(this, payload);
+        });
+
+        _socket.On("pinVoteState", response =>
+        {
+            var payload = response.GetValue<PinVoteUpdateDto>();
+            PinVoteStateReceived?.Invoke(this, payload);
+        });
+
+        _socket.On("pinnedMessageChanged", response =>
+        {
+            var payload = response.GetValue<PinnedMessageChangedDto>();
+            PinnedMessageChanged?.Invoke(this, payload);
+        });
+
+        _socket.On("kickVoteState", response =>
+        {
+            var payload = response.GetValue<KickVoteUpdateDto>();
+            KickVoteStateReceived?.Invoke(this, payload);
+        });
+
+        _socket.On("kicked", response =>
+        {
+            var payload = response.GetValue<KickedDto>();
+            Kicked?.Invoke(this, payload);
         });
 
         _socket.On("typingIndicator", response =>
@@ -90,6 +162,24 @@ public sealed class ChatClient : IAsyncDisposable
         {
             var message = response.GetValue<PrivateMessageDto>();
             PrivateMessageReceived?.Invoke(this, message);
+        });
+
+        _socket.On("tokenMinted", response =>
+        {
+            var payload = response.GetValue<TokenMintedDto>();
+            TokenMinted?.Invoke(this, payload);
+        });
+
+        _socket.On("banned", response =>
+        {
+            var payload = response.GetValue<BannedDto>();
+            Banned?.Invoke(this, payload);
+        });
+
+        _socket.On("authFailed", response =>
+        {
+            var payload = response.GetValue<AuthFailedDto>();
+            AuthFailed?.Invoke(this, payload);
         });
 
         _socket.On("gamesList", response =>
@@ -118,7 +208,11 @@ public sealed class ChatClient : IAsyncDisposable
                 {
                     jobId = _jobId,
                     username = _username,
-                    userId = _userId
+                    userId = _userId,
+                    countryCode = _countryCode,
+                    preferredLanguage = _preferredLanguage,
+                    dmPublicKey = _dmPublicKey,
+                    token = _token
                 });
             }
         };
@@ -130,7 +224,56 @@ public sealed class ChatClient : IAsyncDisposable
             jobId = jobId,
             username = username,
             userId = userId,
-            placeId = placeId
+            placeId = placeId,
+            countryCode = _countryCode,
+            preferredLanguage = _preferredLanguage,
+            dmPublicKey = _dmPublicKey,
+            token = _token
+        });
+    }
+
+    public void SetToken(string? token)
+    {
+        _token = token;
+    }
+
+    public async Task MintTokenAsync(CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("mintToken");
+    }
+
+    public async Task VoteLanguageAsync(string languageCode, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            return;
+
+        await _socket.EmitAsync("voteLanguage", new
+        {
+            jobId = _jobId,
+            username = _username,
+            languageCode
+        });
+    }
+
+    public async Task UpdatePresenceAsync(string? countryCode = null, string? preferredLanguage = null, string? dmPublicKey = null, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            return;
+
+        if (countryCode != null) _countryCode = countryCode;
+        if (preferredLanguage != null) _preferredLanguage = preferredLanguage;
+        if (dmPublicKey != null) _dmPublicKey = dmPublicKey;
+
+        await _socket.EmitAsync("updatePresence", new
+        {
+            jobId = _jobId,
+            username = _username,
+            countryCode = _countryCode,
+            preferredLanguage = _preferredLanguage,
+            dmPublicKey = _dmPublicKey
         });
     }
 
@@ -166,7 +309,111 @@ public sealed class ChatClient : IAsyncDisposable
             jobId = _jobId,
             username = _username,
             userId = _userId,
-            content = content
+            content = content,
+            token = _token
+        });
+    }
+
+    public async Task SendReplyAsync(string content, string replyToId, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("sendMessage", new
+        {
+            jobId = _jobId,
+            username = _username,
+            userId = _userId,
+            content,
+            replyToId,
+            token = _token
+        });
+    }
+
+    public async Task EditMessageAsync(string messageId, string newContent, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("editMessage", new
+        {
+            jobId = _jobId,
+            messageId,
+            username = _username,
+            userId = _userId,
+            content = newContent,
+            token = _token
+        });
+    }
+
+    public async Task DeleteMessageAsync(string messageId, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("deleteMessage", new
+        {
+            jobId = _jobId,
+            messageId,
+            username = _username,
+            userId = _userId,
+            token = _token
+        });
+    }
+
+    public async Task AddReactionAsync(string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("addReaction", new
+        {
+            jobId = _jobId,
+            messageId,
+            emoji,
+            username = _username,
+            userId = _userId
+        });
+    }
+
+    public async Task RemoveReactionAsync(string messageId, string emoji, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("removeReaction", new
+        {
+            jobId = _jobId,
+            messageId,
+            emoji,
+            username = _username,
+            userId = _userId
+        });
+    }
+
+    public async Task VotePinAsync(string messageId, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("votePin", new
+        {
+            jobId = _jobId,
+            messageId,
+            username = _username
+        });
+    }
+
+    public async Task VoteKickAsync(string targetUsername, CancellationToken cancellationToken = default)
+    {
+        if (_socket is null || !_socket.Connected || _jobId is null || _username is null)
+            throw new InvalidOperationException("Client is not connected");
+
+        await _socket.EmitAsync("voteKick", new
+        {
+            jobId = _jobId,
+            targetUsername,
+            username = _username
         });
     }
 
@@ -214,8 +461,60 @@ public sealed class ChatClient : IAsyncDisposable
             jobId = jobId,
             username = _username,
             userId = _userId,
-            content = content
+            content = content,
+            token = _token
         });
+    }
+
+    public sealed class TokenMintedDto
+    {
+        [JsonPropertyName("userId")]
+        public long UserId { get; set; }
+
+        [JsonPropertyName("token")]
+        public string Token { get; set; } = string.Empty;
+    }
+
+    public sealed class BannedDto
+    {
+        [JsonPropertyName("userId")]
+        public long? UserId { get; set; }
+
+        [JsonPropertyName("reason")]
+        public string? Reason { get; set; }
+
+        [JsonPropertyName("appealUrl")]
+        public string? AppealUrl { get; set; }
+    }
+
+    public sealed class AuthFailedDto
+    {
+        [JsonPropertyName("userId")]
+        public long? UserId { get; set; }
+
+        [JsonPropertyName("reason")]
+        public string? Reason { get; set; }
+    }
+
+    public sealed class LanguageChangedDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("languageCode")]
+        public string LanguageCode { get; set; } = string.Empty;
+    }
+
+    public sealed class LanguageVoteStateDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("languageCode")]
+        public string LanguageCode { get; set; } = string.Empty;
+
+        [JsonPropertyName("votes")]
+        public Dictionary<string, List<string>> Votes { get; set; } = new();
     }
 
     private async Task CreateChannelAsync(string username, string jobId, long? userId, CancellationToken cancellationToken)
@@ -242,5 +541,44 @@ public sealed class ChatClient : IAsyncDisposable
 
         [JsonPropertyName("participants")]
         public List<ChannelParticipantDto> Participants { get; set; } = new();
+    }
+
+    public sealed class PinVoteUpdateDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("pinnedMessageId")]
+        public string? PinnedMessageId { get; set; }
+
+        [JsonPropertyName("activePinVote")]
+        public PinVoteStateDto? ActivePinVote { get; set; }
+    }
+
+    public sealed class PinnedMessageChangedDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("pinnedMessageId")]
+        public string? PinnedMessageId { get; set; }
+    }
+
+    public sealed class KickVoteUpdateDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("activeKickVote")]
+        public KickVoteStateDto? ActiveKickVote { get; set; }
+    }
+
+    public sealed class KickedDto
+    {
+        [JsonPropertyName("jobId")]
+        public string JobId { get; set; } = string.Empty;
+
+        [JsonPropertyName("reason")]
+        public string Reason { get; set; } = string.Empty;
     }
 }

@@ -13,6 +13,7 @@ using Microsoft.Toolkit.Uwp.Notifications;
 using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Text.Json;
+using System.Reflection;
 
 namespace BloxCord.Client;
 
@@ -23,18 +24,50 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel = new();
     private ChatClient? _chatClient;
-    private readonly DiscordRpcService _discordRpc = new();
     private readonly Dictionary<string, ParticipantViewModel> _participantLookup = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<long, string> _avatarUrlCache = new();
     private readonly DispatcherTimer _typingTimer;
     private bool _isTypingLocally;
 
+    private readonly E2eeDmService _e2eeDm = new();
+    private readonly Dictionary<long, string> _dmPublicKeysByUserId = new();
+    private string? _currentChannelLanguageCode;
+
+    private static List<ReactionBadge>? BuildReactionBadges(Dictionary<string, ReactionBucketDto>? reactions)
+    {
+        if (reactions is null || reactions.Count == 0)
+            return null;
+
+        var list = new List<ReactionBadge>();
+        foreach (var kvp in reactions)
+        {
+            var emoji = kvp.Key;
+            var bucket = kvp.Value;
+            var count = bucket?.Usernames?.Count ?? 0;
+            if (count <= 0) count = bucket?.UserIds?.Count ?? 0;
+            if (count <= 0) continue;
+
+            list.Add(new ReactionBadge { Emoji = emoji, Count = count });
+        }
+
+        return list.Count == 0 ? null : list;
+    }
+
+    private static string? BuildReplyPreview(ConversationViewModel conv, string? replyToId)
+    {
+        if (string.IsNullOrWhiteSpace(replyToId))
+            return null;
+
+        var target = conv.Messages.LastOrDefault(m => string.Equals(m.Id, replyToId, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return "Reply";
+
+        return $"{target.Username}: {TrimPreview(target.Content)}";
+    }
+
     public MainWindow()
     {
         InitializeComponent();
-        
-        _discordRpc.Initialize();
-        _discordRpc.SetStatus("Browsing Servers", "Idle");
 
         // Load config
         ConfigService.Load();
@@ -70,10 +103,32 @@ public partial class MainWindow : Window
         }
 
         DataContext = _viewModel;
+
+        _viewModel.PropertyChanged += async (_, args) =>
+        {
+            try
+            {
+                if (args.PropertyName is nameof(MainViewModel.CountryCode) or nameof(MainViewModel.PreferredLanguage) or nameof(MainViewModel.EnableE2eeDirectMessages))
+                {
+                    if (!_viewModel.IsConnected || _chatClient is null)
+                        return;
+
+                    var dmPublicKey = ConfigService.Current.EnableE2eeDirectMessages ? _e2eeDm.GetPublicKeyBase64() : null;
+                    await _chatClient.UpdatePresenceAsync(
+                        countryCode: ConfigService.Current.CountryCode,
+                        preferredLanguage: ConfigService.Current.PreferredLanguage,
+                        dmPublicKey: dmPublicKey);
+                }
+            }
+            catch
+            {
+                // ignore
+            }
+        };
         Closed += async (_, _) => 
         {
             await DisposeClientAsync();
-            _discordRpc.Dispose();
+            _e2eeDm.Dispose();
         };
 
         _typingTimer = new DispatcherTimer
@@ -94,6 +149,7 @@ public partial class MainWindow : Window
         _ = FetchBannerAsync();
     }
 
+
     private async Task FetchBannerAsync()
     {
         try
@@ -102,9 +158,43 @@ public partial class MainWindow : Window
             // Add cache buster
             var url = $"https://raw.githubusercontent.com/pompompur1nn/RoChatBanner/refs/heads/main/banners.json?t={DateTime.UtcNow.Ticks}";
             var json = await client.GetStringAsync(url);
-            var banner = JsonSerializer.Deserialize<BannerDto>(json);
 
-            if (banner != null && banner.Enabled)
+            var currentVersionString = GetCurrentAppVersionString();
+            var currentSemver = TryParseSemver(currentVersionString);
+
+            BannerDto? banner = null;
+
+            // Prefer array schema (rotation) when possible.
+            try
+            {
+                var banners = JsonSerializer.Deserialize<BannerDto[]>(json);
+                if (banners is not null)
+                {
+                    foreach (var candidate in banners)
+                    {
+                        if (candidate is null || !candidate.Enabled)
+                            continue;
+                        if (!IsBannerEligibleForVersion(candidate, currentVersionString, currentSemver))
+                            continue;
+
+                        banner = candidate;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // Fall back to single object.
+            }
+
+            if (banner is null)
+            {
+                var single = JsonSerializer.Deserialize<BannerDto>(json);
+                if (single is not null && single.Enabled && IsBannerEligibleForVersion(single, currentVersionString, currentSemver))
+                    banner = single;
+            }
+
+            if (banner is not null)
             {
                 _viewModel.Banner = new BannerViewModel(banner);
                 _viewModel.IsBannerVisible = true;
@@ -114,6 +204,90 @@ public partial class MainWindow : Window
         {
             // Ignore banner fetch errors
         }
+    }
+
+    private static string GetCurrentAppVersionString()
+    {
+        try
+        {
+            var asm = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
+            var informational = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            if (!string.IsNullOrWhiteSpace(informational))
+                return informational;
+
+            var v = asm.GetName().Version;
+            if (v is not null)
+                return v.ToString();
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return "0.0.0";
+    }
+
+    private static Version? TryParseSemver(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        // Accepts 1.2.3 / 1.2.3.4 and tolerates suffixes like 1.2.3+abc.
+        var m = Regex.Match(value, @"\b(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?\b");
+        if (!m.Success)
+            return null;
+
+        try
+        {
+            var major = int.Parse(m.Groups[1].Value);
+            var minor = int.Parse(m.Groups[2].Value);
+            var patch = int.Parse(m.Groups[3].Value);
+            if (m.Groups[4].Success)
+                return new Version(major, minor, patch, int.Parse(m.Groups[4].Value));
+            return new Version(major, minor, patch);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsBannerEligibleForVersion(BannerDto banner, string currentVersionString, Version? currentSemver)
+    {
+        if (banner.Versions is { Length: > 0 })
+        {
+            foreach (var v in banner.Versions)
+            {
+                if (string.IsNullOrWhiteSpace(v))
+                    continue;
+
+                var trimmed = v.Trim();
+                if (string.Equals(trimmed, currentVersionString, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var parsed = TryParseSemver(trimmed);
+                if (parsed is not null && currentSemver is not null && parsed.Equals(currentSemver))
+                    return true;
+            }
+
+            return false;
+        }
+
+        var min = TryParseSemver(banner.MinVersion);
+        var max = TryParseSemver(banner.MaxVersion);
+
+        if (min is null && max is null)
+            return true;
+
+        if (currentSemver is null)
+            return false;
+
+        if (min is not null && currentSemver < min)
+            return false;
+        if (max is not null && currentSemver > max)
+            return false;
+
+        return true;
     }
 
     public void EnableTestMode()
@@ -126,6 +300,54 @@ public partial class MainWindow : Window
         _viewModel.IsTestMode = true;
         Title += " [TEST MODE]";
         _viewModel.JobId = "TEST_SERVER_JOB_ID";
+    }
+
+    private void WireChatClientHandlers(ChatClient client)
+    {
+        client.MessageReceived -= HandleMessageReceived;
+        client.MessageReceived += HandleMessageReceived;
+
+        client.MessageUpdated -= HandleMessageUpdated;
+        client.MessageUpdated += HandleMessageUpdated;
+
+        client.ParticipantsChanged -= HandleParticipantsChanged;
+        client.ParticipantsChanged += HandleParticipantsChanged;
+
+        client.HistoryReceived -= HandleHistoryReceived;
+        client.HistoryReceived += HandleHistoryReceived;
+
+        client.TypingIndicatorReceived -= HandleTypingIndicator;
+        client.TypingIndicatorReceived += HandleTypingIndicator;
+
+        client.PrivateMessageReceived -= HandlePrivateMessageReceived;
+        client.PrivateMessageReceived += HandlePrivateMessageReceived;
+
+        client.PinnedMessageChanged -= HandlePinnedMessageChanged;
+        client.PinnedMessageChanged += HandlePinnedMessageChanged;
+
+        client.PinVoteStateReceived -= HandlePinVoteState;
+        client.PinVoteStateReceived += HandlePinVoteState;
+
+        client.KickVoteStateReceived -= HandleKickVoteState;
+        client.KickVoteStateReceived += HandleKickVoteState;
+
+        client.Kicked -= HandleKicked;
+        client.Kicked += HandleKicked;
+
+        client.LanguageChanged -= HandleLanguageChanged;
+        client.LanguageChanged += HandleLanguageChanged;
+
+        client.LanguageVoteStateReceived -= HandleLanguageVoteState;
+        client.LanguageVoteStateReceived += HandleLanguageVoteState;
+
+        client.TokenMinted -= HandleTokenMinted;
+        client.TokenMinted += HandleTokenMinted;
+
+        client.Banned -= HandleBanned;
+        client.Banned += HandleBanned;
+
+        client.AuthFailed -= HandleAuthFailed;
+        client.AuthFailed += HandleAuthFailed;
     }
 
     private async void Connect_Click(object sender, RoutedEventArgs e)
@@ -184,11 +406,7 @@ public partial class MainWindow : Window
             _viewModel.StatusMessage = "Connecting to chat server...";
 
             _chatClient = new ChatClient(_viewModel.BackendUrl);
-            _chatClient.MessageReceived += HandleMessageReceived;
-            _chatClient.ParticipantsChanged += HandleParticipantsChanged;
-            _chatClient.HistoryReceived += HandleHistoryReceived;
-            _chatClient.TypingIndicatorReceived += HandleTypingIndicator;
-            _chatClient.PrivateMessageReceived += HandlePrivateMessageReceived;
+            WireChatClientHandlers(_chatClient);
 
             _participantLookup.Clear();
             _viewModel.Participants.Clear();
@@ -212,18 +430,86 @@ public partial class MainWindow : Window
                 }
             }
 
-            await _chatClient.ConnectAsync(_viewModel.Username, _viewModel.JobId, userId, _viewModel.PlaceId);
+            var dmPublicKey = ConfigService.Current.EnableE2eeDirectMessages ? _e2eeDm.GetPublicKeyBase64() : null;
+            await _chatClient.ConnectAsync(
+                _viewModel.Username,
+                _viewModel.JobId,
+                userId,
+                _viewModel.PlaceId,
+                countryCode: ConfigService.Current.CountryCode,
+                preferredLanguage: ConfigService.Current.PreferredLanguage,
+                dmPublicKey: dmPublicKey,
+                token: ConfigService.Current.UserToken);
 
             _viewModel.IsConnected = true;
             _viewModel.StatusMessage = "Connected!";
-            
-            _discordRpc.SetStatus("Chatting in Game", $"Playing as {_viewModel.Username}", startTime: DateTime.UtcNow);
+
         }
         catch (Exception ex)
         {
             _viewModel.StatusMessage = $"Connect failed: {ex.Message}";
             MessageBox.Show($"Connect failed: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
         }
+    }
+
+    public async Task VoteLanguageAsync(string languageCode)
+    {
+        if (_chatClient is null)
+            throw new InvalidOperationException("Not connected");
+
+        await _chatClient.VoteLanguageAsync(languageCode);
+    }
+
+    public async Task RequestTokenMintAsync()
+    {
+        if (_chatClient is null)
+            throw new InvalidOperationException("Not connected");
+
+        await _chatClient.MintTokenAsync();
+    }
+
+    private void HandleTokenMinted(object? sender, ChatClient.TokenMintedDto dto)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (!string.IsNullOrWhiteSpace(dto.Token))
+            {
+                ConfigService.Current.UserToken = dto.Token;
+                ConfigService.Save();
+
+                _viewModel.UserToken = dto.Token;
+                _chatClient?.SetToken(dto.Token);
+
+                _viewModel.StatusMessage = "Token minted.";
+            }
+        });
+    }
+
+    private void HandleBanned(object? sender, ChatClient.BannedDto dto)
+    {
+        Dispatcher.Invoke(async () =>
+        {
+            var msg = dto.Reason ?? "Banned";
+            if (!string.IsNullOrWhiteSpace(dto.AppealUrl))
+            {
+                msg += $"\nAppeal: {dto.AppealUrl}";
+            }
+            MessageBox.Show(msg, "Banned", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await DisposeClientAsync();
+            _viewModel.IsConnected = false;
+            _viewModel.StatusMessage = "Disconnected (banned).";
+        });
+    }
+
+    private void HandleAuthFailed(object? sender, ChatClient.AuthFailedDto dto)
+    {
+        Dispatcher.Invoke(async () =>
+        {
+            MessageBox.Show(dto.Reason ?? "Authentication failed", "Auth Failed", MessageBoxButton.OK, MessageBoxImage.Warning);
+            await DisposeClientAsync();
+            _viewModel.IsConnected = false;
+            _viewModel.StatusMessage = "Disconnected (auth failed).";
+        });
     }
 
     private async void Disconnect_Click(object sender, RoutedEventArgs e)
@@ -235,7 +521,8 @@ public partial class MainWindow : Window
         _viewModel.ResetMessages();
         _viewModel.IsConnected = false;
         _viewModel.StatusMessage = "Disconnected.";
-        _discordRpc.SetStatus("Browsing Servers", "Idle");
+
+        // No channel to update once disconnected.
     }
 
     private async void Send_Click(object sender, RoutedEventArgs e)
@@ -256,19 +543,56 @@ public partial class MainWindow : Window
             if (message.Length == 0)
                 return;
 
-            if (_viewModel.SelectedConversation != null)
+            // Slash commands (minimal UX)
+            if (!_viewModel.IsEditing && !_viewModel.IsReplying)
+            {
+                if (message.StartsWith("/lang ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var code = message.Substring(6).Trim();
+                    if (!string.IsNullOrWhiteSpace(code))
+                        await _chatClient.VoteLanguageAsync(code);
+
+                    _viewModel.OutgoingMessage = string.Empty;
+                    return;
+                }
+
+                if (message.StartsWith("/country ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var code = message.Substring(9).Trim();
+                    ConfigService.Current.CountryCode = code;
+                    ConfigService.Save();
+
+                    await _chatClient.UpdatePresenceAsync(countryCode: code);
+                    _viewModel.OutgoingMessage = string.Empty;
+                    return;
+                }
+            }
+
+            message = CustomEmojiService.ExpandToRbxassetIds(message);
+
+            if (_viewModel.IsEditing && !string.IsNullOrWhiteSpace(_viewModel.EditingMessageId))
+            {
+                await _chatClient.EditMessageAsync(_viewModel.EditingMessageId, message);
+                _viewModel.ClearComposerContext();
+            }
+            else if (_viewModel.IsReplying && !string.IsNullOrWhiteSpace(_viewModel.ReplyToMessageId))
+            {
+                await _chatClient.SendReplyAsync(message, _viewModel.ReplyToMessageId);
+                _viewModel.ReplyToMessageId = null;
+                _viewModel.ReplyPreview = string.Empty;
+            }
+            else if (_viewModel.SelectedConversation != null)
             {
                 if (_viewModel.SelectedConversation.IsDirectMessage)
                 {
                     // Use the new "Game" based DM system (JobId = -TargetUserId)
                     if (long.TryParse(_viewModel.SelectedConversation.Id, out var toUserId))
                     {
-                        // If the ID is already negative (from incoming), use it. If positive (from user selection), negate it.
-                        // Actually, GetOrCreateDm sets ID to positive UserId usually.
-                        // But we want to send to "-TargetUserId".
-                        // Wait, if I send to -200, I am talking to User 200.
-                        // So jobId should be "-200".
-                        
+                        if (ConfigService.Current.EnableE2eeDirectMessages && _dmPublicKeysByUserId.TryGetValue(toUserId, out var peerKey) && !string.IsNullOrWhiteSpace(peerKey))
+                        {
+                            message = _e2eeDm.EncryptToEnvelope(peerKey, message);
+                        }
+
                         var targetJobId = toUserId > 0 ? $"-{toUserId}" : toUserId.ToString();
                         await _chatClient.SendToChannelAsync(targetJobId, message);
                     }
@@ -305,8 +629,22 @@ public partial class MainWindow : Window
 
     private async void HandleMessageReceived(object? sender, ChatMessageDto dto)
     {
+        var effectiveContent = await GetEffectiveContentAsync(dto);
+        var rawWireContent = effectiveContent;
+        effectiveContent = CustomEmojiService.ExpandToRbxassetIds(effectiveContent);
+
+        if (ConfigService.Current.EnableE2eeDirectMessages && _e2eeDm.TryDecryptEnvelope(effectiveContent, out var decrypted))
+        {
+            effectiveContent = decrypted;
+        }
         var resolution = await ResolveAvatarAsync(dto.UserId, dto.Username, dto.AvatarUrl);
-        var imageUrl = await ExtractImageUrlAsync(dto.Content);
+        var displayName = await ResolveDisplayNameAsync(resolution.UserId ?? dto.UserId, dto.Username);
+        var (imageUrls, emojiImageUrls) = await ExtractImageUrlSetsAsync(effectiveContent);
+        var isPing = IsPing(effectiveContent);
+        var displayContent = SanitizeDisplayedContent(effectiveContent);
+        var shownContent = displayContent;
+
+        var senderCountry = _participantLookup.TryGetValue(dto.Username, out var p) ? p.CountryCode : null;
 
         await Dispatcher.InvokeAsync(() =>
         {
@@ -346,25 +684,50 @@ public partial class MainWindow : Window
 
                     var conv = _viewModel.GetOrCreateDm(otherUserId, conversationName);
                     
+                    var isContinuation = IsContinuation(conv, dto.Username, dto.Timestamp.LocalDateTime);
+                    var replyPreview = BuildReplyPreview(conv, dto.ReplyToId);
+
                     conv.Messages.Add(new ClientChatMessage
                     {
+                        Id = dto.Id,
                         JobId = dto.JobId,
                         Username = dto.Username,
-                        Content = dto.Content,
+                        DisplayName = displayName,
+                        Content = shownContent,
+                        RawContent = rawWireContent,
+                        TranslatedContent = null,
                         Timestamp = dto.Timestamp.LocalDateTime,
-                        UserId = dto.UserId,
+                        UserId = resolution.UserId ?? dto.UserId,
+                        CountryCode = senderCountry,
                         AvatarUrl = resolution.AvatarUrl,
-                        ImageUrl = imageUrl
+                        ImageUrl = imageUrls?.FirstOrDefault(),
+                        ImageUrls = imageUrls,
+                        EmojiImageUrls = emojiImageUrls,
+                        ReplyToId = dto.ReplyToId,
+                        ReplyPreview = replyPreview,
+                        EditedAt = dto.EditedAt,
+                        DeletedAt = dto.DeletedAt,
+                        IsSystemMessage = dto.IsSystem ?? false,
+                        IsContinuation = isContinuation,
+                        Reactions = dto.Reactions?.ToDictionary(
+                            kvp => kvp.Key,
+                            kvp => new ReactionBucket { Usernames = kvp.Value.Usernames, UserIds = kvp.Value.UserIds }
+                        ),
+                        ReactionBadges = BuildReactionBadges(dto.Reactions)
                     });
 
                     if (_viewModel.SelectedConversation != conv)
                     {
-                        conv.IsUnread = true;
-                        ShowNotification($"DM from {dto.Username}", dto.Content);
+                        if (!conv.IsMuted || isPing)
+                        {
+                            conv.IsUnread = true;
+                            ShowNotification($"DM from {dto.Username}", displayContent);
+                        }
                     }
                     else if (!IsActive)
                     {
-                        ShowNotification($"DM from {dto.Username}", dto.Content);
+                        if (!conv.IsMuted || isPing)
+                            ShowNotification($"DM from {dto.Username}", displayContent);
                     }
                     return;
                 }
@@ -374,28 +737,354 @@ public partial class MainWindow : Window
             var serverConv = _viewModel.Conversations.FirstOrDefault(c => !c.IsDirectMessage);
             if (serverConv != null)
             {
+                var isContinuation = IsContinuation(serverConv, dto.Username, dto.Timestamp.LocalDateTime);
+                var replyPreview = BuildReplyPreview(serverConv, dto.ReplyToId);
                 serverConv.Messages.Add(new ClientChatMessage
                 {
-                    Content = dto.Content,
+                    Id = dto.Id,
+                    Content = shownContent,
+                    RawContent = rawWireContent,
+                    TranslatedContent = null,
                     JobId = dto.JobId,
                     Username = dto.Username,
+                    DisplayName = displayName,
                     Timestamp = dto.Timestamp.LocalDateTime,
                     UserId = resolution.UserId,
+                    CountryCode = senderCountry,
                     AvatarUrl = resolution.AvatarUrl,
-                    ImageUrl = imageUrl
+                    ImageUrl = imageUrls?.FirstOrDefault(),
+                    ImageUrls = imageUrls,
+                    EmojiImageUrls = emojiImageUrls,
+                    ReplyToId = dto.ReplyToId,
+                    ReplyPreview = replyPreview,
+                    EditedAt = dto.EditedAt,
+                    DeletedAt = dto.DeletedAt,
+                    IsSystemMessage = dto.IsSystem ?? false,
+                    IsContinuation = isContinuation,
+                    Reactions = dto.Reactions?.ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => new ReactionBucket { Usernames = kvp.Value.Usernames, UserIds = kvp.Value.UserIds }
+                    ),
+                    ReactionBadges = BuildReactionBadges(dto.Reactions)
                 });
 
                 if (_viewModel.SelectedConversation != serverConv)
                 {
-                    serverConv.IsUnread = true;
-                    ShowNotification($"#{serverConv.Title}", $"{dto.Username}: {dto.Content}");
+                    if (!serverConv.IsMuted || isPing)
+                    {
+                        serverConv.IsUnread = true;
+                        ShowNotification($"#{serverConv.Title}", $"{dto.Username}: {shownContent}");
+                    }
                 }
                 else if (!IsActive)
                 {
-                    ShowNotification($"#{serverConv.Title}", $"{dto.Username}: {dto.Content}");
+                    if (!serverConv.IsMuted || isPing)
+                        ShowNotification($"#{serverConv.Title}", $"{dto.Username}: {shownContent}");
                 }
             }
         }, DispatcherPriority.Background);
+    }
+
+    private async void HandleMessageUpdated(object? sender, ChatMessageDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(dto.Id)) return;
+        if (dto.JobId.StartsWith("-")) return; // DM updates later
+
+        var effectiveContent = await GetEffectiveContentAsync(dto);
+        var rawWireContent = effectiveContent;
+        effectiveContent = CustomEmojiService.ExpandToRbxassetIds(effectiveContent);
+        if (ConfigService.Current.EnableE2eeDirectMessages && _e2eeDm.TryDecryptEnvelope(effectiveContent, out var decrypted))
+        {
+            effectiveContent = decrypted;
+        }
+        var resolution = await ResolveAvatarAsync(dto.UserId, dto.Username, dto.AvatarUrl);
+        var displayName = await ResolveDisplayNameAsync(resolution.UserId ?? dto.UserId, dto.Username);
+        var (imageUrls, emojiImageUrls) = await ExtractImageUrlSetsAsync(effectiveContent);
+        var displayContent = SanitizeDisplayedContent(effectiveContent);
+        var shownContent = displayContent;
+
+        var senderCountry = _participantLookup.TryGetValue(dto.Username, out var p) ? p.CountryCode : null;
+
+        await Dispatcher.InvokeAsync(() =>
+        {
+            var serverConv = _viewModel.Conversations.FirstOrDefault(c => !c.IsDirectMessage);
+            if (serverConv == null) return;
+
+            var idx = serverConv.Messages.ToList().FindIndex(m => m.Id == dto.Id);
+            if (idx < 0) return;
+
+            // Deleted messages should disappear from the UI.
+            if (dto.DeletedAt.HasValue)
+            {
+                serverConv.Messages.RemoveAt(idx);
+                return;
+            }
+
+            var replyPreview = BuildReplyPreview(serverConv, dto.ReplyToId);
+
+            serverConv.Messages[idx] = new ClientChatMessage
+            {
+                Id = dto.Id,
+                Content = shownContent,
+                RawContent = rawWireContent,
+                TranslatedContent = null,
+                JobId = dto.JobId,
+                Username = dto.Username,
+                DisplayName = displayName,
+                Timestamp = dto.Timestamp.LocalDateTime,
+                UserId = resolution.UserId,
+                CountryCode = senderCountry,
+                AvatarUrl = resolution.AvatarUrl,
+                ImageUrl = imageUrls?.FirstOrDefault(),
+                ImageUrls = imageUrls,
+                EmojiImageUrls = emojiImageUrls,
+                ReplyToId = dto.ReplyToId,
+                ReplyPreview = replyPreview,
+                EditedAt = dto.EditedAt,
+                DeletedAt = dto.DeletedAt,
+                IsSystemMessage = dto.IsSystem ?? false,
+                IsContinuation = serverConv.Messages.ElementAtOrDefault(idx)?.IsContinuation ?? false,
+                Reactions = dto.Reactions?.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new ReactionBucket { Usernames = kvp.Value.Usernames, UserIds = kvp.Value.UserIds }
+                ),
+                ReactionBadges = BuildReactionBadges(dto.Reactions)
+            };
+        }, DispatcherPriority.Background);
+    }
+
+    private static bool IsContinuation(ConversationViewModel conv, string username, DateTime timestamp)
+    {
+        // group by same sender within 5 minutes
+        var last = conv.Messages.LastOrDefault(m => !m.IsSystemMessage);
+        if (last is null) return false;
+        if (!string.Equals(last.Username, username, StringComparison.OrdinalIgnoreCase)) return false;
+        return (timestamp - last.Timestamp).TotalMinutes <= 5;
+    }
+
+    private bool IsPing(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return false;
+        if (string.IsNullOrWhiteSpace(_viewModel.Username)) return false;
+        return Regex.IsMatch(content, $@"\B@{Regex.Escape(_viewModel.Username)}\b", RegexOptions.IgnoreCase);
+    }
+
+    private static string SanitizeDisplayedContent(string content)
+    {
+        if (string.IsNullOrEmpty(content)) return string.Empty;
+        // Autohide Roblox decal ids
+        var withoutIds = Regex.Replace(content, @"rbxassetid://emoji://\d+", string.Empty, RegexOptions.IgnoreCase);
+        withoutIds = Regex.Replace(withoutIds, @"emoji://\d+", string.Empty, RegexOptions.IgnoreCase);
+        withoutIds = Regex.Replace(withoutIds, @"rbxassetid://(?!emoji://)\d+", string.Empty, RegexOptions.IgnoreCase);
+        return Regex.Replace(withoutIds, @"\s{2,}", " ").Trim();
+    }
+
+    private static Task<string> GetEffectiveContentAsync(ChatMessageDto dto)
+    {
+        // Placeholder for future long-message compression.
+        return Task.FromResult(dto.Content ?? string.Empty);
+    }
+
+    private void MuteConversation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ConversationViewModel conv)
+        {
+            conv.IsMuted = true;
+            PersistMutedConversation(conv.Id);
+        }
+    }
+
+    private void UnmuteConversation_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ConversationViewModel conv)
+        {
+            conv.IsMuted = false;
+            PersistMutedConversation(conv.Id, remove: true);
+        }
+    }
+
+    private void PersistMutedConversation(string conversationId, bool remove = false)
+    {
+        try
+        {
+            var list = ConfigService.Current.MutedConversations ?? new List<string>();
+            if (remove)
+            {
+                list.RemoveAll(x => string.Equals(x, conversationId, StringComparison.OrdinalIgnoreCase));
+            }
+            else
+            {
+                if (!list.Any(x => string.Equals(x, conversationId, StringComparison.OrdinalIgnoreCase)))
+                    list.Add(conversationId);
+            }
+            ConfigService.Current.MutedConversations = list;
+            ConfigService.Save();
+        }
+        catch { }
+    }
+
+    private void PrefillRbxassetId_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_viewModel.OutgoingMessage) && !_viewModel.OutgoingMessage.EndsWith(" "))
+                _viewModel.OutgoingMessage += " ";
+            _viewModel.OutgoingMessage += "rbxassetid://";
+
+            MessageInput.Focus();
+            MessageInput.CaretIndex = MessageInput.Text.Length;
+        }
+        catch { }
+    }
+
+    private void PrefillEmojiAssetId_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(_viewModel.OutgoingMessage) && !_viewModel.OutgoingMessage.EndsWith(" "))
+                _viewModel.OutgoingMessage += " ";
+            _viewModel.OutgoingMessage += "emoji://";
+
+            MessageInput.Focus();
+            MessageInput.CaretIndex = MessageInput.Text.Length;
+        }
+        catch { }
+    }
+
+    private void OpenAssetInsertMenu_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is not Button b)
+                return;
+
+            if (b.ContextMenu is null)
+                return;
+
+            b.ContextMenu.PlacementTarget = b;
+            b.ContextMenu.IsOpen = true;
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private void CancelComposerContext_Click(object sender, RoutedEventArgs e)
+    {
+        _viewModel.ClearComposerContext();
+    }
+
+    private void CopyMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            Clipboard.SetText(m.Content ?? string.Empty);
+        }
+    }
+
+    private void CopyUsername_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            Clipboard.SetText(m.Username ?? string.Empty);
+        }
+    }
+
+    private void ReplyToMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            if (string.IsNullOrWhiteSpace(m.Id)) return;
+            _viewModel.EditingMessageId = null;
+            _viewModel.EditingPreview = string.Empty;
+
+            _viewModel.ReplyToMessageId = m.Id;
+            _viewModel.ReplyPreview = $"Replying to {m.Username}: {TrimPreview(m.Content)}";
+            MessageInput.Focus();
+        }
+    }
+
+    private async void JumpToReply_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is not Button b || b.CommandParameter is not ClientChatMessage m)
+                return;
+            if (string.IsNullOrWhiteSpace(m.ReplyToId))
+                return;
+
+            var conv = _viewModel.SelectedConversation;
+            if (conv is null) return;
+
+            var target = conv.Messages.FirstOrDefault(x => string.Equals(x.Id, m.ReplyToId, StringComparison.OrdinalIgnoreCase));
+            if (target is null)
+            {
+                _viewModel.StatusMessage = "Original message not found.";
+                return;
+            }
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                MessagesItemsControl?.UpdateLayout();
+                var container = MessagesItemsControl?.ItemContainerGenerator.ContainerFromItem(target) as FrameworkElement;
+                container?.BringIntoView();
+            });
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private void EditMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            if (string.IsNullOrWhiteSpace(m.Id)) return;
+            if (!string.Equals(m.Username, _viewModel.Username, StringComparison.OrdinalIgnoreCase)) return;
+
+            _viewModel.ReplyToMessageId = null;
+            _viewModel.ReplyPreview = string.Empty;
+
+            _viewModel.EditingMessageId = m.Id;
+            _viewModel.EditingPreview = $"Editing: {TrimPreview(m.Content)}";
+            _viewModel.OutgoingMessage = m.Content;
+            MessageInput.Focus();
+            MessageInput.CaretIndex = MessageInput.Text.Length;
+        }
+    }
+
+    private async void DeleteMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_chatClient is null) return;
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            if (string.IsNullOrWhiteSpace(m.Id)) return;
+            if (!string.Equals(m.Username, _viewModel.Username, StringComparison.OrdinalIgnoreCase)) return;
+            await _chatClient.DeleteMessageAsync(m.Id);
+        }
+    }
+
+    private async void ReactThumbsUp_Click(object sender, RoutedEventArgs e) => await ReactQuickAsync(sender, "👍");
+    private async void ReactHeart_Click(object sender, RoutedEventArgs e) => await ReactQuickAsync(sender, "❤️");
+    private async void ReactLaugh_Click(object sender, RoutedEventArgs e) => await ReactQuickAsync(sender, "😂");
+
+    private async Task ReactQuickAsync(object sender, string emoji)
+    {
+        if (_chatClient is null) return;
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            if (string.IsNullOrWhiteSpace(m.Id)) return;
+            await _chatClient.AddReactionAsync(m.Id, emoji);
+        }
+    }
+
+    private static string TrimPreview(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var t = text.Replace("\r", " ").Replace("\n", " ").Trim();
+        return t.Length <= 80 ? t : t.Substring(0, 77) + "...";
     }
 
     private async void HandlePrivateMessageReceived(object? sender, PrivateMessageDto dto)
@@ -428,7 +1117,19 @@ public partial class MainWindow : Window
         }
 
         var resolution = await ResolveAvatarAsync(dto.FromUserId, dto.FromUsername, null);
-        var imageUrl = await ExtractImageUrlAsync(dto.Content);
+        var effectiveContent = await GetEffectiveContentAsync(new ChatMessageDto { Content = dto.Content });
+        var rawWireContent = effectiveContent;
+        effectiveContent = CustomEmojiService.ExpandToRbxassetIds(effectiveContent);
+
+        if (ConfigService.Current.EnableE2eeDirectMessages && _e2eeDm.TryDecryptEnvelope(effectiveContent, out var decrypted))
+        {
+            effectiveContent = decrypted;
+        }
+        var (imageUrls, emojiImageUrls) = await ExtractImageUrlSetsAsync(effectiveContent);
+        var displayContent = SanitizeDisplayedContent(effectiveContent);
+        var shownContent = displayContent;
+        var isPing = IsPing(effectiveContent);
+        var senderCountry = _participantLookup.TryGetValue(dto.FromUsername, out var p) ? p.CountryCode : null;
 
         await Dispatcher.InvokeAsync(() =>
         {
@@ -443,41 +1144,94 @@ public partial class MainWindow : Window
 
             conv.Messages.Add(new ClientChatMessage
             {
-                Content = dto.Content,
+                Content = shownContent,
+                RawContent = rawWireContent,
+                TranslatedContent = null,
                 Username = dto.FromUsername,
                 Timestamp = dto.Timestamp.LocalDateTime,
                 UserId = dto.FromUserId,
+                CountryCode = senderCountry,
                 AvatarUrl = resolution.AvatarUrl,
                 IsSystemMessage = false,
-                ImageUrl = imageUrl,
+                ImageUrl = imageUrls?.FirstOrDefault(),
+                ImageUrls = imageUrls,
+                EmojiImageUrls = emojiImageUrls,
                 JobId = "DM"
             });
 
             if (_viewModel.SelectedConversation != conv)
             {
-                conv.IsUnread = true;
-                ShowNotification($"DM from {dto.FromUsername}", dto.Content);
+                if (!conv.IsMuted || isPing)
+                {
+                    conv.IsUnread = true;
+                    ShowNotification($"DM from {dto.FromUsername}", shownContent);
+                }
             }
             else if (!IsActive)
             {
-                ShowNotification($"DM from {dto.FromUsername}", dto.Content);
+                if (!conv.IsMuted || isPing)
+                    ShowNotification($"DM from {dto.FromUsername}", shownContent);
             }
         });
     }
 
-    private async Task<string?> ExtractImageUrlAsync(string content)
+    private async Task<(List<string>? DecalUrls, List<string>? EmojiUrls)> ExtractImageUrlSetsAsync(string content)
     {
-        var match = Regex.Match(content, @"rbxassetid://(\d+)");
-        if (!match.Success)
+        if (string.IsNullOrWhiteSpace(content))
+            return (null, null);
+
+        // Separate channels:
+        // - emoji://<id> or rbxassetid://emoji://<id> => small emoji rendering
+        // - rbxassetid://<id> or roblox.com/library/<id> => regular decal rendering
+
+        var emojiIds = new List<long>();
+        foreach (Match m in Regex.Matches(content, @"rbxassetid://emoji://(\d+)", RegexOptions.IgnoreCase))
         {
-            match = Regex.Match(content, @"roblox\.com/library/(\d+)");
+            if (long.TryParse(m.Groups[1].Value, out var id))
+                emojiIds.Add(id);
         }
 
-        if (match.Success && long.TryParse(match.Groups[1].Value, out var assetId))
+        foreach (Match m in Regex.Matches(content, @"emoji://(\d+)", RegexOptions.IgnoreCase))
         {
-            return await RobloxAssetService.ResolveDecalAsync(assetId);
+            if (long.TryParse(m.Groups[1].Value, out var id))
+                emojiIds.Add(id);
         }
-        return null;
+
+        var decalIds = new List<long>();
+        foreach (Match m in Regex.Matches(content, @"rbxassetid://(?!emoji://)(\d+)", RegexOptions.IgnoreCase))
+        {
+            if (long.TryParse(m.Groups[1].Value, out var id))
+                decalIds.Add(id);
+        }
+
+        foreach (Match m in Regex.Matches(content, @"roblox\.com/library/(\d+)", RegexOptions.IgnoreCase))
+        {
+            if (long.TryParse(m.Groups[1].Value, out var id))
+                decalIds.Add(id);
+        }
+
+        var emojiDistinct = emojiIds.Distinct().Take(16).ToList();
+        var decalDistinct = decalIds.Distinct().Take(6).ToList();
+
+        List<string>? resolvedEmoji = null;
+        if (emojiDistinct.Count > 0)
+        {
+            var emojiTasks = emojiDistinct.Select(RobloxAssetService.ResolveDecalAsync).ToArray();
+            var emojiResolved = await Task.WhenAll(emojiTasks);
+            resolvedEmoji = emojiResolved.Where(url => !string.IsNullOrWhiteSpace(url)).Select(url => url!).ToList();
+            if (resolvedEmoji.Count == 0) resolvedEmoji = null;
+        }
+
+        List<string>? resolvedDecals = null;
+        if (decalDistinct.Count > 0)
+        {
+            var decalTasks = decalDistinct.Select(RobloxAssetService.ResolveDecalAsync).ToArray();
+            var decalResolved = await Task.WhenAll(decalTasks);
+            resolvedDecals = decalResolved.Where(url => !string.IsNullOrWhiteSpace(url)).Select(url => url!).ToList();
+            if (resolvedDecals.Count == 0) resolvedDecals = null;
+        }
+
+        return (resolvedDecals, resolvedEmoji);
     }
 
     private void ShowNotification(string title, string content)
@@ -549,7 +1303,9 @@ public partial class MainWindow : Window
                         {
                             Username = dto.Username,
                             UserId = dto.UserId,
-                            AvatarUrl = dto.AvatarUrl ?? string.Empty
+                            AvatarUrl = dto.AvatarUrl ?? string.Empty,
+                            CountryCode = dto.CountryCode,
+                            DmPublicKey = dto.DmPublicKey
                         };
 
                         _participantLookup[dto.Username] = vm;
@@ -573,12 +1329,19 @@ public partial class MainWindow : Window
                     else
                     {
                         // Update existing participant details if needed
-                        if (vm.UserId != dto.UserId || vm.AvatarUrl != dto.AvatarUrl)
+                        if (vm.UserId != dto.UserId || vm.AvatarUrl != dto.AvatarUrl || vm.CountryCode != dto.CountryCode || vm.DmPublicKey != dto.DmPublicKey)
                         {
                             vm.UserId = dto.UserId;
                             vm.AvatarUrl = dto.AvatarUrl ?? string.Empty;
+                            vm.CountryCode = dto.CountryCode;
+                            vm.DmPublicKey = dto.DmPublicKey;
                             _ = EnsureAvatarForParticipantAsync(vm);
                         }
+                    }
+
+                    if (dto.UserId.HasValue && !string.IsNullOrWhiteSpace(dto.DmPublicKey))
+                    {
+                        _dmPublicKeysByUserId[dto.UserId.Value] = dto.DmPublicKey!;
                     }
                 }
                 
@@ -610,16 +1373,52 @@ public partial class MainWindow : Window
 
         foreach (var entry in ordered)
         {
+            if (entry.DeletedAt.HasValue)
+                continue;
+
+            var effectiveContent = await GetEffectiveContentAsync(entry);
+            var rawWireContent = effectiveContent;
+            effectiveContent = CustomEmojiService.ExpandToRbxassetIds(effectiveContent);
+
+            if (ConfigService.Current.EnableE2eeDirectMessages && _e2eeDm.TryDecryptEnvelope(effectiveContent, out var decrypted))
+            {
+                effectiveContent = decrypted;
+            }
+
+            var displayContent = SanitizeDisplayedContent(effectiveContent);
+            var shownContent = displayContent;
+
+            var senderCountry = _participantLookup.TryGetValue(entry.Username, out var p) ? p.CountryCode : null;
             var resolution = await ResolveAvatarAsync(entry.UserId, entry.Username, entry.AvatarUrl);
+            var displayName = await ResolveDisplayNameAsync(resolution.UserId ?? entry.UserId, entry.Username);
+            var (imageUrls, emojiImageUrls) = await ExtractImageUrlSetsAsync(effectiveContent);
 
             prepared.Add(new ClientChatMessage
             {
-                Content = entry.Content,
+                Id = entry.Id,
+                Content = shownContent,
+                RawContent = rawWireContent,
+                TranslatedContent = null,
                 JobId = entry.JobId,
                 Username = entry.Username,
+                DisplayName = displayName,
                 Timestamp = entry.Timestamp.LocalDateTime,
                 UserId = resolution.UserId,
-                AvatarUrl = resolution.AvatarUrl
+                CountryCode = senderCountry,
+                AvatarUrl = resolution.AvatarUrl,
+                ImageUrl = imageUrls?.FirstOrDefault(),
+                ImageUrls = imageUrls,
+                EmojiImageUrls = emojiImageUrls,
+                ReplyToId = entry.ReplyToId,
+                ReplyPreview = null,
+                EditedAt = entry.EditedAt,
+                DeletedAt = entry.DeletedAt,
+                IsSystemMessage = entry.IsSystem ?? false,
+                Reactions = entry.Reactions?.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new ReactionBucket { Usernames = kvp.Value.Usernames, UserIds = kvp.Value.UserIds }
+                ),
+                ReactionBadges = BuildReactionBadges(entry.Reactions)
             });
         }
 
@@ -629,6 +1428,54 @@ public partial class MainWindow : Window
 
             foreach (var message in prepared)
                 serverConv.Messages.Add(message);
+
+            // Fill reply previews now that the conversation list exists.
+            for (var i = 0; i < serverConv.Messages.Count; i++)
+            {
+                var msg = serverConv.Messages[i];
+                if (string.IsNullOrWhiteSpace(msg.ReplyToId))
+                    continue;
+
+                var rp = BuildReplyPreview(serverConv, msg.ReplyToId);
+                if (rp is null)
+                    continue;
+
+                serverConv.Messages[i] = new ClientChatMessage
+                {
+                    Id = msg.Id,
+                    Username = msg.Username,
+                    DisplayName = msg.DisplayName,
+                    CountryCode = msg.CountryCode,
+                    Content = msg.Content,
+                    Timestamp = msg.Timestamp,
+                    JobId = msg.JobId,
+                    UserId = msg.UserId,
+                    AvatarUrl = msg.AvatarUrl,
+                    ImageUrl = msg.ImageUrl,
+                    ImageUrls = msg.ImageUrls,
+                    EmojiImageUrls = msg.EmojiImageUrls,
+                    IsSystemMessage = msg.IsSystemMessage,
+                    IsContinuation = msg.IsContinuation,
+                    RawContent = msg.RawContent,
+                    TranslatedContent = msg.TranslatedContent,
+                    ReplyToId = msg.ReplyToId,
+                    ReplyPreview = rp,
+                    EditedAt = msg.EditedAt,
+                    DeletedAt = msg.DeletedAt,
+                    Reactions = msg.Reactions,
+                    ReactionBadges = msg.ReactionBadges
+                };
+            }
+
+            // Update pinned preview based on current messages (if we already received it)
+            if (!string.IsNullOrWhiteSpace(_viewModel.PinnedMessageId))
+            {
+                var pinned = serverConv.Messages.FirstOrDefault(m => m.Id == _viewModel.PinnedMessageId);
+                if (pinned != null)
+                {
+                    _viewModel.PinnedMessagePreview = $"{pinned.Username}: {TrimPreview(pinned.Content)}";
+                }
+            }
 
             // Add Safety Warning
             serverConv.Messages.Add(new ClientChatMessage
@@ -641,6 +1488,107 @@ public partial class MainWindow : Window
                 AvatarUrl = string.Empty
             });
         }, DispatcherPriority.Background);
+    }
+
+    private void HandlePinnedMessageChanged(object? sender, ChatClient.PinnedMessageChangedDto dto)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _viewModel.PinnedMessageId = dto.PinnedMessageId;
+
+            var serverConv = _viewModel.Conversations.FirstOrDefault(c => !c.IsDirectMessage);
+            if (serverConv != null && !string.IsNullOrWhiteSpace(dto.PinnedMessageId))
+            {
+                var pinned = serverConv.Messages.FirstOrDefault(m => m.Id == dto.PinnedMessageId);
+                if (pinned != null)
+                {
+                    _viewModel.PinnedMessagePreview = $"{pinned.Username}: {TrimPreview(pinned.Content)}";
+                }
+            }
+        });
+    }
+
+    private void HandlePinVoteState(object? sender, ChatClient.PinVoteUpdateDto dto)
+    {
+        // Minimal UX: surface state in StatusMessage
+        Dispatcher.Invoke(() =>
+        {
+            if (dto.ActivePinVote?.Voters != null)
+            {
+                _viewModel.StatusMessage = $"Pin vote: {dto.ActivePinVote.Voters.Count} votes";
+            }
+        });
+    }
+
+    private void HandleKickVoteState(object? sender, ChatClient.KickVoteUpdateDto dto)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (dto.ActiveKickVote != null)
+            {
+                _viewModel.StatusMessage = $"Kick vote: {dto.ActiveKickVote.TargetUsername} ({dto.ActiveKickVote.Voters.Count} votes)";
+            }
+        });
+    }
+
+    private void HandleKicked(object? sender, ChatClient.KickedDto dto)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            ShowNotification("Kicked", dto.Reason);
+        });
+    }
+
+    private void HandleLanguageChanged(object? sender, ChatClient.LanguageChangedDto dto)
+    {
+        _currentChannelLanguageCode = dto.LanguageCode;
+
+        Dispatcher.Invoke(() =>
+        {
+            _viewModel.StatusMessage = $"Language: {dto.LanguageCode}";
+
+            var serverConv = _viewModel.Conversations.FirstOrDefault(c => !c.IsDirectMessage);
+            if (serverConv != null)
+            {
+                serverConv.Messages.Add(new ClientChatMessage
+                {
+                    Username = "System",
+                    Content = $"Language is now {dto.LanguageCode}.",
+                    Timestamp = DateTime.Now,
+                    JobId = _viewModel.JobId,
+                    IsSystemMessage = true,
+                    AvatarUrl = string.Empty
+                });
+            }
+        });
+    }
+
+    private void HandleLanguageVoteState(object? sender, ChatClient.LanguageVoteStateDto dto)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            _viewModel.StatusMessage = $"Language vote: {dto.LanguageCode}";
+        });
+    }
+
+    private async void VotePinMessage_Click(object sender, RoutedEventArgs e)
+    {
+        if (_chatClient is null) return;
+        if (sender is MenuItem mi && mi.CommandParameter is ClientChatMessage m)
+        {
+            if (string.IsNullOrWhiteSpace(m.Id)) return;
+            await _chatClient.VotePinAsync(m.Id);
+        }
+    }
+
+    private async void VoteKick_Click(object sender, RoutedEventArgs e)
+    {
+        if (_chatClient is null) return;
+        if (sender is MenuItem mi && mi.CommandParameter is ParticipantViewModel p)
+        {
+            if (string.IsNullOrWhiteSpace(p.Username)) return;
+            await _chatClient.VoteKickAsync(p.Username);
+        }
     }
 
     private void HandleTypingIndicator(object? sender, TypingIndicatorDto payload)
@@ -729,14 +1677,42 @@ public partial class MainWindow : Window
     {
         var resolution = await ResolveAvatarAsync(participant.UserId, participant.Username, participant.AvatarUrl);
 
-        if (string.IsNullOrEmpty(resolution.AvatarUrl))
-            return;
-
+        var effectiveUserId = resolution.UserId ?? participant.UserId;
+        var displayName = await ResolveDisplayNameAsync(effectiveUserId, participant.Username);
         await Dispatcher.InvokeAsync(() =>
         {
             participant.UserId ??= resolution.UserId;
-            participant.AvatarUrl = resolution.AvatarUrl;
+
+            if (!string.IsNullOrEmpty(resolution.AvatarUrl))
+                participant.AvatarUrl = resolution.AvatarUrl;
+
+            if (!string.IsNullOrWhiteSpace(displayName))
+                participant.DisplayName = displayName;
         }, DispatcherPriority.Background);
+    }
+
+    private static string? NormalizeDisplayName(string? displayName)
+        => string.IsNullOrWhiteSpace(displayName) ? null : displayName.Trim();
+
+    private static bool DisplayNameDiffers(string? displayName, string username)
+    {
+        if (string.IsNullOrWhiteSpace(displayName))
+            return false;
+
+        return !string.Equals(displayName.Trim(), username, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task<string?> ResolveDisplayNameAsync(long? userId, string username)
+    {
+        if (!userId.HasValue)
+            return null;
+
+        var record = await RobloxUserDirectory.TryGetUserAsync(userId.Value);
+        if (record is null)
+            return null;
+
+        var candidate = NormalizeDisplayName(record.DisplayName);
+        return DisplayNameDiffers(candidate, username) ? candidate : null;
     }
 
     private async Task<AvatarResolution> ResolveAvatarAsync(long? userId, string username, string? existingUrl)
@@ -866,16 +1842,27 @@ public partial class MainWindow : Window
 
                     await DisposeClientAsync();
                     _chatClient = new ChatClient(_viewModel.BackendUrl);
-                    _chatClient.MessageReceived += HandleMessageReceived;
-                    _chatClient.ParticipantsChanged += HandleParticipantsChanged;
-                    _chatClient.HistoryReceived += HandleHistoryReceived;
-                    _chatClient.TypingIndicatorReceived += HandleTypingIndicator;
+                    WireChatClientHandlers(_chatClient);
+
+                    _participantLookup.Clear();
+                    _viewModel.Participants.Clear();
+                    _viewModel.ResetMessages();
+
+                    _viewModel.StatusMessage = "Connecting to chat server...";
 
                     var userId = ResolveUserId();
-                    await _chatClient.ConnectAsync(_viewModel.Username, _viewModel.JobId, userId, _viewModel.PlaceId);
+                    var dmPublicKey = ConfigService.Current.EnableE2eeDirectMessages ? _e2eeDm.GetPublicKeyBase64() : null;
+                    await _chatClient.ConnectAsync(
+                        _viewModel.Username,
+                        _viewModel.JobId,
+                        userId,
+                        _viewModel.PlaceId,
+                        countryCode: ConfigService.Current.CountryCode,
+                        preferredLanguage: ConfigService.Current.PreferredLanguage,
+                        dmPublicKey: dmPublicKey,
+                        token: ConfigService.Current.UserToken);
                     _viewModel.IsConnected = true;
-                    
-                    _discordRpc.SetStatus($"Playing {game.Name}", $"Server: {game.Servers.FirstOrDefault(s => s.JobId == jobId)?.PlayerCount ?? 0} Players", startTime: DateTime.UtcNow);
+                    _viewModel.StatusMessage = "Connected!";
                 }
                 catch (Exception ex)
                 {

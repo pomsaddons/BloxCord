@@ -3,6 +3,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:BloxCord.Client">
     <Application.Resources>
-         
+        <FontFamily x:Key="AppFontFamily">Segoe UI, Segoe UI Emoji</FontFamily>
+
+        <Style TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+        </Style>
+
+        <Style TargetType="TextBox">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+        </Style>
+
+        <Style TargetType="Label">
+            <Setter Property="FontFamily" Value="{StaticResource AppFontFamily}" />
+        </Style>
     </Application.Resources>
 </Application>

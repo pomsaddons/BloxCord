@@ -2,6 +2,11 @@ using System.Windows;
 using System.Windows.Media;
 using BloxCord.Client.Services;
 using BloxCord.Client.ViewModels;
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text.Json;
+using System.Text;
 
 namespace BloxCord.Client;
 
@@ -153,5 +158,98 @@ public partial class SettingsWindow : Window
     private void Close_Click(object sender, RoutedEventArgs e)
     {
         Close();
+    }
+
+    private async void MintToken_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            await _mainWindow.RequestTokenMintAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to mint token: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void VoteLanguage_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var code = VoteLanguageInput?.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(code))
+                return;
+
+            await _mainWindow.VoteLanguageAsync(code);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to vote language: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenCustomEmojis_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            var folder = Path.Combine(appData, "RoChat");
+            var filePath = Path.Combine(folder, "custom_emojis.json");
+
+            Directory.CreateDirectory(folder);
+            if (!File.Exists(filePath))
+            {
+                var json = JsonSerializer.Serialize(new System.Collections.Generic.Dictionary<string, long>(), new JsonSerializerOptions { WriteIndented = true });
+                File.WriteAllText(filePath, json);
+            }
+
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = filePath,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to open custom emoji file: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ReloadCustomEmojis_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            CustomEmojiService.Reload();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Failed to reload emojis: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void Donate_Click(object sender, RoutedEventArgs e)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Solana:");
+        sb.AppendLine("5NR4u5pyGXDFf7m2Ad32n4rNPycY5ZYnYLngY6aK2rKj");
+        sb.AppendLine();
+        sb.AppendLine("Litecoin (LTC):");
+        sb.AppendLine("LUqjTW9fjaWPWpMQ6EtBKmDmKHJfm7TnEo");
+        sb.AppendLine();
+        sb.AppendLine("Ethereum (ETH):");
+        sb.AppendLine("0xf80e3f6C3AD31Fd4Da7fe6708f179316D2b3cB1B");
+
+        var text = sb.ToString().TrimEnd();
+
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch
+        {
+            // Clipboard might be unavailable (RDP/permissions). Ignore.
+        }
+
+        MessageBox.Show(text + "\n\n(Copied to clipboard)", "Donate", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 }

@@ -10,6 +10,7 @@ public class ConversationViewModel : INotifyPropertyChanged
 {
     private string _title = string.Empty;
     private bool _isUnread;
+    private bool _isMuted;
 
     public string Id { get; set; } = string.Empty; // JobId or UserId or GroupId
     public bool IsDirectMessage { get; set; }
@@ -25,6 +26,12 @@ public class ConversationViewModel : INotifyPropertyChanged
     {
         get => _isUnread;
         set => SetField(ref _isUnread, value);
+    }
+
+    public bool IsMuted
+    {
+        get => _isMuted;
+        set => SetField(ref _isMuted, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

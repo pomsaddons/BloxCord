@@ -4,6 +4,9 @@ namespace BloxCord.Client.Models;
 
 public sealed class ChatMessageDto
 {
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
     [JsonPropertyName("jobId")]
     public string JobId { get; set; } = string.Empty;
 
@@ -23,6 +26,30 @@ public sealed class ChatMessageDto
 
     [JsonPropertyName("avatarUrl")]
     public string? AvatarUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("replyToId")]
+    public string? ReplyToId { get; set; }
+
+    [JsonPropertyName("editedAt")]
+    public DateTimeOffset? EditedAt { get; set; }
+
+    [JsonPropertyName("deletedAt")]
+    public DateTimeOffset? DeletedAt { get; set; }
+
+    [JsonPropertyName("isSystem")]
+    public bool? IsSystem { get; set; }
+
+    [JsonPropertyName("reactions")]
+    public Dictionary<string, ReactionBucketDto>? Reactions { get; set; }
+}
+
+public sealed class ReactionBucketDto
+{
+    [JsonPropertyName("usernames")]
+    public List<string> Usernames { get; set; } = new();
+
+    [JsonPropertyName("userIds")]
+    public List<long> UserIds { get; set; } = new();
 }
 
 public sealed class PrivateMessageDto
@@ -57,6 +84,12 @@ public sealed class ChannelParticipantDto
 
     [JsonPropertyName("isTyping")]
     public bool IsTyping { get; set; }
+
+    [JsonPropertyName("countryCode")]
+    public string? CountryCode { get; set; }
+
+    [JsonPropertyName("dmPublicKey")]
+    public string? DmPublicKey { get; set; }
 }
 
 public sealed class ChannelSnapshotDto
@@ -71,6 +104,36 @@ public sealed class ChannelSnapshotDto
     [JsonPropertyName("participants")]
     public List<ChannelParticipantDto>? Participants { get; set; }
         = new();
+
+    [JsonPropertyName("pinnedMessageId")]
+    public string? PinnedMessageId { get; set; }
+
+    [JsonPropertyName("activePinVote")]
+    public PinVoteStateDto? ActivePinVote { get; set; }
+
+    [JsonPropertyName("activeKickVote")]
+    public KickVoteStateDto? ActiveKickVote { get; set; }
+
+    [JsonPropertyName("languageCode")]
+    public string? LanguageCode { get; set; }
+}
+
+public sealed class PinVoteStateDto
+{
+    [JsonPropertyName("messageId")]
+    public string MessageId { get; set; } = string.Empty;
+
+    [JsonPropertyName("voters")]
+    public List<string> Voters { get; set; } = new();
+}
+
+public sealed class KickVoteStateDto
+{
+    [JsonPropertyName("targetUsername")]
+    public string TargetUsername { get; set; } = string.Empty;
+
+    [JsonPropertyName("voters")]
+    public List<string> Voters { get; set; } = new();
 }
 
 public class ChannelJoinDto
@@ -84,6 +147,18 @@ public class ChannelJoinDto
     [JsonPropertyName("userId")]
     public long? UserId { get; set; }
         = null;
+
+    [JsonPropertyName("countryCode")]
+    public string? CountryCode { get; set; }
+
+    [JsonPropertyName("preferredLanguage")]
+    public string? PreferredLanguage { get; set; }
+
+    [JsonPropertyName("token")]
+    public string? Token { get; set; }
+
+    [JsonPropertyName("dmPublicKey")]
+    public string? DmPublicKey { get; set; }
 }
 
 public sealed class PostChatMessageDto : ChannelJoinDto

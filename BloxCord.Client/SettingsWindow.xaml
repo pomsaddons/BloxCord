@@ -117,6 +117,51 @@
                         <TextBox x:Name="ColorInput" Text="#020617" Padding="5" Background="#202020" Foreground="White" BorderBrush="#404040"/>
                         <Button Content="Apply Color" Margin="0,10,0,0" Click="ApplyColor_Click"/>
                     </StackPanel>
+
+                    <!-- Identity / Flags -->
+                    <TextBlock Text="Identity" FontSize="16" FontWeight="SemiBold" Margin="0,20,0,10" Foreground="#CCCCCC"/>
+                    <TextBlock Text="Country Code (e.g. US, GB, JP)" FontWeight="SemiBold" FontSize="12" Foreground="#AAAAAA" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding CountryCode, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="13" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="Preferred Language (e.g. en, es, fr)" FontWeight="SemiBold" FontSize="12" Foreground="#AAAAAA" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding PreferredLanguage, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="13" Margin="0,0,0,10"/>
+
+                    <TextBlock Text="User Token (for edit/delete)" FontWeight="SemiBold" FontSize="12" Foreground="#AAAAAA" Margin="0,0,0,4"/>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox Text="{Binding UserToken, UpdateSourceTrigger=PropertyChanged}" Padding="8" FontSize="13" Margin="0,0,8,0"/>
+                        <Button Grid.Column="1" Content="Mint" Click="MintToken_Click" Width="70"/>
+                    </Grid>
+
+                    <CheckBox Content="Enable E2EE direct messages" IsChecked="{Binding EnableE2eeDirectMessages, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,0,10"/>
+
+                    <!-- Channel -->
+                    <TextBlock Text="Channel" FontSize="16" FontWeight="SemiBold" Margin="0,20,0,10" Foreground="#CCCCCC"/>
+                    <TextBlock Text="Vote Language (e.g. en, es, fr)" FontWeight="SemiBold" FontSize="12" Foreground="#AAAAAA" Margin="0,0,0,4"/>
+                    <Grid Margin="0,0,0,10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBox x:Name="VoteLanguageInput" Padding="8" FontSize="13" Margin="0,0,8,0"/>
+                        <Button Grid.Column="1" Content="Vote" Click="VoteLanguage_Click" Width="70"/>
+                    </Grid>
+
+                    <TextBlock Text="Custom Emojis" FontSize="16" FontWeight="SemiBold" Margin="0,20,0,10" Foreground="#CCCCCC"/>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                        <Button Content="Open custom_emojis.json" Click="OpenCustomEmojis_Click" Margin="0,0,8,0"/>
+                        <Button Content="Reload" Click="ReloadCustomEmojis_Click" Width="90"/>
+                    </StackPanel>
+
+                    <!-- About -->
+                    <TextBlock Text="About" FontSize="16" FontWeight="SemiBold" Margin="0,20,0,10" Foreground="#CCCCCC"/>
+                    <TextBlock Text="RoChat (Build 0.6.0)" Foreground="#DDDDDD"/>
+                    <TextBlock Text="Made with ❤️ by pom. Open Source @ github.com/pomsaddons/rochat" Foreground="#AAAAAA" TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+                    <Button Content="Donate" Click="Donate_Click" Margin="0,12,0,0" HorizontalAlignment="Left" Width="120"/>
                 </StackPanel>
             </ScrollViewer>
 

@@ -5,7 +5,10 @@ import cors from 'cors';
 import { ChannelRegistry } from './services/ChannelRegistry';
 import { GroupRegistry } from './services/GroupRegistry';
 import { RobloxAvatarService } from './services/RobloxAvatarService';
+import { BanService } from './services/BanService';
+import { TokenService } from './services/TokenService';
 import axios from 'axios';
+import { v4 as uuidv4 } from 'uuid';
 
 const app = express();
 app.use(cors());
@@ -24,19 +27,47 @@ const io = new Server(server, {
 const registry = new ChannelRegistry();
 const groupRegistry = new GroupRegistry();
 const avatarService = new RobloxAvatarService();
+const banService = new BanService();
+const tokenService = new TokenService();
 const disconnectTimeouts = new Map<string, any>();
 const userSockets = new Map<number, string>(); // UserId -> SocketId
+const participantSockets = new Map<string, string>(); // jobId:username -> SocketId
 
 io.on('connection', (socket: Socket) => {
     console.log('A user connected:', socket.id);
 
-    socket.on('joinChannel', async (data: { jobId: string, username: string, userId?: number, placeId?: number }) => {
-        const { jobId, username, userId, placeId } = data;
+    socket.on('joinChannel', async (data: { jobId: string, username: string, userId?: number, placeId?: number, countryCode?: string, preferredLanguage?: string, dmPublicKey?: string, token?: string }) => {
+        const { jobId, username, userId, placeId, countryCode, preferredLanguage, dmPublicKey, token } = data;
         if (!jobId || !username) return;
+
+        const ban = banService.isBanned(userId);
+        if (ban.banned) {
+            socket.emit('banned', {
+                userId,
+                reason: ban.reason ?? 'Banned',
+                appealUrl: ban.appealUrl
+            });
+            try { socket.disconnect(true); } catch { }
+            return;
+        }
+
+        if (typeof userId === 'number' && typeof token === 'string' && token.length > 0) {
+            const expected = tokenService.getToken(userId);
+            if (expected && expected !== token) {
+                socket.emit('authFailed', {
+                    userId,
+                    reason: 'Invalid token'
+                });
+                try { socket.disconnect(true); } catch { }
+                return;
+            }
+        }
 
         if (userId) {
             userSockets.set(userId, socket.id);
         }
+
+        participantSockets.set(`${jobId}:${username}`, socket.id);
 
         const previousJobId = (socket as any).jobId;
         const previousUsername = (socket as any).username;
@@ -63,7 +94,11 @@ io.on('connection', (socket: Socket) => {
             if (url) avatarUrl = url;
         }
 
-        const channel = registry.createOrGetChannel(jobId, username, userId, avatarUrl, placeId);
+        const channel = registry.createOrGetChannel(jobId, username, userId, avatarUrl, placeId, {
+            countryCode,
+            preferredLanguage,
+            dmPublicKey
+        });
         
         socket.join(jobId);
         
@@ -78,10 +113,47 @@ io.on('connection', (socket: Socket) => {
             createdAt: channel.createdAt,
             createdBy: channel.createdBy,
             history: channel.getHistory(),
-            participants: channel.getParticipants()
+            participants: channel.getParticipants(),
+            pinnedMessageId: channel.getPinnedMessageId(),
+            activePinVote: channel.getActivePinVote(),
+            activeKickVote: channel.getActiveKickVote(),
+            languageCode: channel.getLanguageCode()
         });
 
         // Notify others
+        io.to(jobId).emit('participantsChanged', {
+            jobId,
+            participants: channel.getParticipants()
+        });
+    });
+
+    socket.on('mintToken', async (_data?: any) => {
+        const userId = (socket as any).userId as number | undefined;
+        if (typeof userId !== 'number') return;
+
+        const ban = banService.isBanned(userId);
+        if (ban.banned) {
+            socket.emit('banned', {
+                userId,
+                reason: ban.reason ?? 'Banned',
+                appealUrl: ban.appealUrl
+            });
+            try { socket.disconnect(true); } catch { }
+            return;
+        }
+
+        const token = tokenService.getOrCreateToken(userId);
+        socket.emit('tokenMinted', { userId, token });
+    });
+
+    socket.on('updatePresence', (data: { jobId: string, username: string, countryCode?: string, preferredLanguage?: string, dmPublicKey?: string }) => {
+        const { jobId, username, countryCode, preferredLanguage, dmPublicKey } = data;
+        if (!jobId || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        channel.updateParticipantMeta(username, { countryCode, preferredLanguage, dmPublicKey });
         io.to(jobId).emit('participantsChanged', {
             jobId,
             participants: channel.getParticipants()
@@ -181,24 +253,31 @@ io.on('connection', (socket: Socket) => {
         socket.emit('gamesList', games);
     });
 
-    socket.on('sendMessage', (data: { jobId: string, username: string, content: string, userId?: number }) => {
-        const { jobId, username, content, userId } = data;
+    socket.on('sendMessage', (data: { jobId: string, username: string, content: string, userId?: number, replyToId?: string, token?: string }) => {
+        const { jobId, username, content, userId, replyToId, token } = data;
         if (!jobId || !username || !content) return;
+
+        const socketUserId = (socket as any).userId as number | undefined;
 
         // Handle DM routing (Negative Job IDs)
         if (jobId.startsWith('-')) {
             const targetUserId = parseInt(jobId.substring(1));
             if (!isNaN(targetUserId)) {
-                const senderUserId = (socket as any).userId || userId;
+                const senderUserId = socketUserId ?? userId;
+
+                const ban = banService.isBanned(senderUserId);
+                if (ban.banned) return;
                 
                 // Construct message
                 const message = {
+                    id: uuidv4(),
                     jobId, // Will be overridden for each recipient
                     username,
                     userId: senderUserId,
                     content,
                     timestamp: new Date(),
-                    avatarUrl: undefined // Could fetch if needed
+                    avatarUrl: undefined, // Could fetch if needed
+                    replyToId
                 };
 
                 // 1. Send to Target
@@ -227,17 +306,200 @@ io.on('connection', (socket: Socket) => {
         const finalUserId = userId ?? participant?.userId;
         const avatarUrl = participant?.avatarUrl;
 
+        const ban = banService.isBanned(finalUserId);
+        if (ban.banned) return;
+
         const message = {
+            id: uuidv4(),
             jobId,
             username,
             userId: finalUserId,
             content,
             timestamp: new Date(),
-            avatarUrl
+            avatarUrl,
+            replyToId
         };
 
-        channel.appendMessage(message);
+        const authorToken = (typeof finalUserId === 'number' && typeof token === 'string' && token.length > 0 && tokenService.isTokenValid(finalUserId, token))
+            ? token
+            : undefined;
+
+        channel.appendMessage(message, authorToken);
         io.to(jobId).emit('receiveMessage', message);
+    });
+
+    socket.on('editMessage', (data: { jobId: string; messageId: string; username: string; userId?: number; content: string; token?: string }) => {
+        const { jobId, messageId, username, userId, content, token } = data;
+        if (!jobId || !messageId || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const existing = channel.getMessageById(messageId);
+        if (!existing) return;
+
+        const expectedToken = channel.getAuthorToken(messageId);
+        if (expectedToken) {
+            if (typeof token !== 'string' || token !== expectedToken) return;
+        } else {
+            // Best-effort author check (no auth system yet)
+            const authorMatches = (typeof existing.userId === 'number' && typeof userId === 'number' && existing.userId === userId)
+                || (existing.username === username);
+            if (!authorMatches) return;
+        }
+
+        const updated = channel.tryUpdateMessage(messageId, {
+            content,
+            editedAt: new Date()
+        });
+        if (!updated) return;
+
+        io.to(jobId).emit('messageUpdated', updated);
+    });
+
+    socket.on('deleteMessage', (data: { jobId: string; messageId: string; username: string; userId?: number; token?: string }) => {
+        const { jobId, messageId, username, userId, token } = data;
+        if (!jobId || !messageId || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const existing = channel.getMessageById(messageId);
+        if (!existing) return;
+
+        const expectedToken = channel.getAuthorToken(messageId);
+        if (expectedToken) {
+            if (typeof token !== 'string' || token !== expectedToken) return;
+        } else {
+            const authorMatches = (typeof existing.userId === 'number' && typeof userId === 'number' && existing.userId === userId)
+                || (existing.username === username);
+            if (!authorMatches) return;
+        }
+
+        const updated = channel.tryUpdateMessage(messageId, {
+            content: '',
+            deletedAt: new Date()
+        });
+        if (!updated) return;
+
+        io.to(jobId).emit('messageUpdated', updated);
+    });
+
+    socket.on('addReaction', (data: { jobId: string; messageId: string; emoji: string; username: string; userId?: number }) => {
+        const { jobId, messageId, emoji, username, userId } = data;
+        if (!jobId || !messageId || !emoji || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const updated = channel.tryAddReaction(messageId, emoji, { username, userId });
+        if (!updated) return;
+
+        io.to(jobId).emit('messageUpdated', updated);
+    });
+
+    socket.on('removeReaction', (data: { jobId: string; messageId: string; emoji: string; username: string; userId?: number }) => {
+        const { jobId, messageId, emoji, username, userId } = data;
+        if (!jobId || !messageId || !emoji || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const updated = channel.tryRemoveReaction(messageId, emoji, { username, userId });
+        if (!updated) return;
+
+        io.to(jobId).emit('messageUpdated', updated);
+    });
+
+    socket.on('votePin', (data: { jobId: string; messageId: string; username: string }) => {
+        const { jobId, messageId, username } = data;
+        if (!jobId || !messageId || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+        if (!channel.getMessageById(messageId)) return;
+
+        const result = channel.votePin(messageId, username);
+
+        io.to(jobId).emit('pinVoteState', {
+            jobId,
+            pinnedMessageId: result.pinnedMessageId,
+            activePinVote: result.vote
+        });
+
+        if (result.pinnedNow) {
+            io.to(jobId).emit('pinnedMessageChanged', {
+                jobId,
+                pinnedMessageId: result.pinnedMessageId
+            });
+        }
+    });
+
+    socket.on('voteKick', (data: { jobId: string; targetUsername: string; username: string }) => {
+        const { jobId, targetUsername, username } = data;
+        if (!jobId || !targetUsername || !username) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const result = channel.voteKick(targetUsername, username);
+
+        io.to(jobId).emit('kickVoteState', {
+            jobId,
+            activeKickVote: result.vote
+        });
+
+        if (result.kickedNow) {
+            const key = `${jobId}:${targetUsername}`;
+            const targetSocketId = participantSockets.get(key);
+            if (targetSocketId) {
+                io.to(targetSocketId).emit('kicked', {
+                    jobId,
+                    reason: 'Vote kick passed'
+                });
+
+                const targetSocket = io.sockets.sockets.get(targetSocketId);
+                try {
+                    targetSocket?.leave(jobId);
+                } catch { }
+            }
+
+            registry.removeParticipant(jobId, targetUsername);
+            registry.setTypingState(jobId, targetUsername, false);
+
+            io.to(jobId).emit('participantsChanged', {
+                jobId,
+                participants: registry.getParticipants(jobId)
+            });
+
+            io.to(jobId).emit('typingIndicator', {
+                jobId,
+                usernames: registry.getTypingParticipants(jobId)
+            });
+        }
+    });
+
+    socket.on('voteLanguage', (data: { jobId: string; username: string; languageCode: string }) => {
+        const { jobId, username, languageCode } = data;
+        if (!jobId || !username || !languageCode) return;
+
+        const channel = registry.getChannel(jobId);
+        if (!channel) return;
+
+        const result = channel.voteLanguage(languageCode, username);
+
+        io.to(jobId).emit('languageVoteState', {
+            jobId,
+            languageCode: result.languageCode,
+            votes: result.votes
+        });
+
+        if (result.changedNow) {
+            io.to(jobId).emit('languageChanged', {
+                jobId,
+                languageCode: result.languageCode
+            });
+        }
     });
 
     socket.on('notifyTyping', (data: { jobId: string, username: string, isTyping: boolean }) => {
@@ -338,6 +600,7 @@ io.on('connection', (socket: Socket) => {
         }
 
         if (jobId && username) {
+            participantSockets.delete(`${jobId}:${username}`);
             const key = `${jobId}:${username}`;
             if (disconnectTimeouts.has(key)) {
                 clearTimeout(disconnectTimeouts.get(key));

@@ -27,6 +27,20 @@ public class BannerDto
 
     [JsonPropertyName("colors")]
     public BannerColorsDto? Colors { get; set; }
+
+    // Optional version targeting
+    // - If omitted, banner is eligible for all versions.
+    // - versions: exact matches against app version string/semver.
+    // - minVersion/maxVersion: inclusive semver bounds.
+
+    [JsonPropertyName("versions")]
+    public string[]? Versions { get; set; }
+
+    [JsonPropertyName("minVersion")]
+    public string? MinVersion { get; set; }
+
+    [JsonPropertyName("maxVersion")]
+    public string? MaxVersion { get; set; }
 }
 
 public class BannerCtaDto

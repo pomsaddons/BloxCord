@@ -11,6 +11,12 @@ node_modules/
 npm-debug.log
 yarn-error.log
 
+# Server build output
+dist/
+
+# Server runtime data
+tokens.json
+
 # Config
 config.json
 

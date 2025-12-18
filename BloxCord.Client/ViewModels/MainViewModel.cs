@@ -27,6 +27,22 @@ public class MainViewModel : INotifyPropertyChanged
     private BannerViewModel? _banner;
     private bool _isBannerVisible;
 
+    private string _countryCode = Services.ConfigService.Current.CountryCode;
+    private string _preferredLanguage = Services.ConfigService.Current.PreferredLanguage;
+
+    private string _userToken = Services.ConfigService.Current.UserToken;
+
+    private bool _enableE2eeDirectMessages = Services.ConfigService.Current.EnableE2eeDirectMessages;
+
+
+    private string? _pinnedMessageId;
+    private string _pinnedMessagePreview = string.Empty;
+
+    private string? _replyToMessageId;
+    private string _replyPreview = string.Empty;
+    private string? _editingMessageId;
+    private string _editingPreview = string.Empty;
+
     public ObservableCollection<ConversationViewModel> Conversations { get; } = new();
 
     // Proxy property for backward compatibility / ease of binding
@@ -48,6 +64,59 @@ public class MainViewModel : INotifyPropertyChanged
         set => SetField(ref _isBannerVisible, value);
     }
 
+    public string CountryCode
+    {
+        get => _countryCode;
+        set
+        {
+            if (SetField(ref _countryCode, value))
+            {
+                Services.ConfigService.Current.CountryCode = value;
+                Services.ConfigService.Save();
+            }
+        }
+    }
+
+    public string PreferredLanguage
+    {
+        get => _preferredLanguage;
+        set
+        {
+            if (SetField(ref _preferredLanguage, value))
+            {
+                Services.ConfigService.Current.PreferredLanguage = value;
+                Services.ConfigService.Save();
+            }
+        }
+    }
+
+    public bool EnableE2eeDirectMessages
+    {
+        get => _enableE2eeDirectMessages;
+        set
+        {
+            if (SetField(ref _enableE2eeDirectMessages, value))
+            {
+                Services.ConfigService.Current.EnableE2eeDirectMessages = value;
+                Services.ConfigService.Save();
+            }
+        }
+    }
+
+
+    public string UserToken
+    {
+        get => _userToken;
+        set
+        {
+            if (SetField(ref _userToken, value))
+            {
+                Services.ConfigService.Current.UserToken = value;
+                Services.ConfigService.Save();
+            }
+        }
+    }
+
     public ICommand OpenGamePageCommand { get; }
     public ICommand ViewServersCommand { get; }
     public ICommand ClearSelectedGameCommand { get; }
@@ -59,6 +128,12 @@ public class MainViewModel : INotifyPropertyChanged
     {
         // Initialize with Server conversation
         var serverConv = new ConversationViewModel { Title = "Server Chat", Id = "SERVER", IsDirectMessage = false };
+        try
+        {
+            if (Services.ConfigService.Current.MutedConversations.Any(x => string.Equals(x, serverConv.Id, StringComparison.OrdinalIgnoreCase)))
+                serverConv.IsMuted = true;
+        }
+        catch { }
         Conversations.Add(serverConv);
         SelectedConversation = serverConv;
 
@@ -118,6 +193,69 @@ public class MainViewModel : INotifyPropertyChanged
         });
 
         ClearSelectedGameCommand = new RelayCommand(_ => SelectedGame = null);
+    }
+
+    public bool IsReplying => !string.IsNullOrEmpty(_replyToMessageId);
+    public string ReplyPreview
+    {
+        get => _replyPreview;
+        set => SetField(ref _replyPreview, value);
+    }
+    public string? ReplyToMessageId
+    {
+        get => _replyToMessageId;
+        set
+        {
+            if (SetField(ref _replyToMessageId, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsReplying)));
+            }
+        }
+    }
+
+    public bool IsEditing => !string.IsNullOrEmpty(_editingMessageId);
+    public string EditingPreview
+    {
+        get => _editingPreview;
+        set => SetField(ref _editingPreview, value);
+    }
+    public string? EditingMessageId
+    {
+        get => _editingMessageId;
+        set
+        {
+            if (SetField(ref _editingMessageId, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsEditing)));
+            }
+        }
+    }
+
+    public void ClearComposerContext()
+    {
+        ReplyToMessageId = null;
+        ReplyPreview = string.Empty;
+        EditingMessageId = null;
+        EditingPreview = string.Empty;
+    }
+
+    public bool HasPinnedMessage => !string.IsNullOrEmpty(_pinnedMessageId);
+    public string? PinnedMessageId
+    {
+        get => _pinnedMessageId;
+        set
+        {
+            if (SetField(ref _pinnedMessageId, value))
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HasPinnedMessage)));
+            }
+        }
+    }
+
+    public string PinnedMessagePreview
+    {
+        get => _pinnedMessagePreview;
+        set => SetField(ref _pinnedMessagePreview, value);
     }
 
     public GameDto? SelectedGame
@@ -252,6 +390,13 @@ public class MainViewModel : INotifyPropertyChanged
             Title = username,
             IsDirectMessage = true
         };
+
+        try
+        {
+            if (Services.ConfigService.Current.MutedConversations.Any(x => string.Equals(x, newConv.Id, StringComparison.OrdinalIgnoreCase)))
+                newConv.IsMuted = true;
+        }
+        catch { }
         
         Conversations.Add(newConv);
         return newConv;

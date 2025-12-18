@@ -35,6 +35,7 @@
         <converters:StringNotEmptyToVisibilityConverter x:Key="AvatarVisibilityConverter" />
         <Style TargetType="TextBox">
             <Setter Property="Foreground" Value="#F5F5F5" />
+            <Setter Property="FontFamily" Value="Segoe UI, Segoe UI Emoji" />
             <Setter Property="Background" Value="#151515" />
             <Setter Property="BorderBrush" Value="#3D3D3D" />
             <Setter Property="BorderThickness" Value="1" />
@@ -294,6 +295,9 @@
                                 <ListBox ItemsSource="{Binding Conversations}" SelectedItem="{Binding SelectedConversation}" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Padding="0">
                                     <ListBox.ItemContainerStyle>
                                         <Style TargetType="ListBoxItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                                             <Setter Property="Template">
                                                 <Setter.Value>
                                                     <ControlTemplate TargetType="ListBoxItem">
@@ -311,9 +315,13 @@
                                                         <ControlTemplate.Triggers>
                                                             <Trigger Property="IsMouseOver" Value="True">
                                                                 <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderBrush" Value="#22FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderThickness" Value="1"/>
                                                             </Trigger>
                                                             <Trigger Property="IsSelected" Value="True">
                                                                 <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderBrush" Value="#33FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderThickness" Value="1"/>
                                                                 <Setter Property="Foreground" Value="White"/>
                                                             </Trigger>
                                                         </ControlTemplate.Triggers>
@@ -322,6 +330,8 @@
                                             </Setter>
                                             <Setter Property="Padding" Value="10,8"/>
                                             <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderBrush" Value="Transparent"/>
+                                            <Setter Property="BorderThickness" Value="0"/>
                                             <Setter Property="Cursor" Value="Hand"/>
                                             <Setter Property="Foreground" Value="#CCCCCC"/>
                                         </Style>
@@ -334,15 +344,19 @@
                                                 </Grid.InputBindings>
                                                 <Grid.ContextMenu>
                                                     <ContextMenu>
+                                                        <MenuItem Header="Mute" Click="MuteConversation_Click" CommandParameter="{Binding}" />
+                                                        <MenuItem Header="Unmute" Click="UnmuteConversation_Click" CommandParameter="{Binding}" />
                                                         <MenuItem Header="Close" Command="{Binding DataContext.CloseConversationCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
                                                     </ContextMenu>
                                                 </Grid.ContextMenu>
                                                 <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
                                                 </Grid.ColumnDefinitions>
-                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                                                <Border Grid.Column="1" Background="#E81123" CornerRadius="6" Width="12" Height="12" Margin="8,0,0,0" Visibility="{Binding IsUnread, Converter={StaticResource BooleanToVisibilityConverter}}" VerticalAlignment="Center"/>
+                                                <TextBlock Text="🔇" FontSize="12" Foreground="#AAAAAA" Margin="0,0,8,0" VerticalAlignment="Center" Visibility="{Binding IsMuted, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                                <TextBlock Grid.Column="1" Text="{Binding Title}" FontWeight="SemiBold" FontSize="14" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                                <Border Grid.Column="2" Background="#E81123" CornerRadius="6" Width="12" Height="12" Margin="8,0,0,0" Visibility="{Binding IsUnread, Converter={StaticResource BooleanToVisibilityConverter}}" VerticalAlignment="Center"/>
                                             </Grid>
                                         </DataTemplate>
                                     </ListBox.ItemTemplate>
@@ -354,11 +368,20 @@
                         <Border Grid.Column="1" Background="{StaticResource CardBrush}" CornerRadius="{StaticResource MediumRadius}" Padding="0" Margin="0,0,10,0">
                             <Grid>
                                 <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <ScrollViewer x:Name="MessagesScrollViewer" Grid.Row="0" VerticalScrollBarVisibility="Hidden" Padding="12">
-                                    <ItemsControl ItemsSource="{Binding Messages}">
+                                <Border Grid.Row="0" Margin="12,12,12,0" Padding="10,6" Background="#1A1A1A" CornerRadius="10"
+                                        Visibility="{Binding HasPinnedMessage, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="📌" FontSize="12" Foreground="#CCCCCC" Margin="0,0,8,0"/>
+                                        <TextBlock Text="{Binding PinnedMessagePreview}" Foreground="#CCCCCC" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <ScrollViewer x:Name="MessagesScrollViewer" Grid.Row="1" VerticalScrollBarVisibility="Hidden" Padding="12">
+                                    <ItemsControl x:Name="MessagesItemsControl" ItemsSource="{Binding Messages}">
                                         <ItemsControl.ItemsPanel>
                                             <ItemsPanelTemplate>
                                                 <StackPanel />
@@ -367,6 +390,21 @@
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="0,0,0,12" RenderTransformOrigin="0.5,0.5">
+                                                    <Grid.ContextMenu>
+                                                        <ContextMenu>
+                                                            <MenuItem Header="Reply" Click="ReplyToMessage_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="Edit" Click="EditMessage_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="Delete" Click="DeleteMessage_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="Vote pin this" Click="VotePinMessage_Click" CommandParameter="{Binding}" />
+                                                            <Separator />
+                                                            <MenuItem Header="React 👍" Click="ReactThumbsUp_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="React ❤️" Click="ReactHeart_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="React 😂" Click="ReactLaugh_Click" CommandParameter="{Binding}" />
+                                                            <Separator />
+                                                            <MenuItem Header="Copy Message" Click="CopyMessage_Click" CommandParameter="{Binding}" />
+                                                            <MenuItem Header="Copy Username" Click="CopyUsername_Click" CommandParameter="{Binding}" />
+                                                        </ContextMenu>
+                                                    </Grid.ContextMenu>
                                                     <Grid.RenderTransform>
                                                         <TranslateTransform/>
                                                     </Grid.RenderTransform>
@@ -386,6 +424,9 @@
                                                                 <Style.Triggers>
                                                                     <DataTrigger Binding="{Binding IsSystemMessage}" Value="True">
                                                                         <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding IsContinuation}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Hidden"/>
                                                                     </DataTrigger>
                                                                 </Style.Triggers>
                                                             </Style>
@@ -411,27 +452,119 @@
                                                             </Style>
                                                         </StackPanel.Style>
                                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-                                                            <TextBlock Text="{Binding Username}" FontWeight="Bold" Foreground="#FFFFFF" FontSize="14"/>
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsContinuation}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding SenderLabel}" FontWeight="Bold" Foreground="#FFFFFF" FontSize="14" FontFamily="Segoe UI, Segoe UI Emoji"/>
+                                                                <Border Margin="8,0,0,0" Padding="6,1" CornerRadius="8" Background="#2B2B2B"
+                                                                        Visibility="{Binding IsOwner, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                                        VerticalAlignment="Center">
+                                                                    <TextBlock Text="OWNER" FontSize="10" FontWeight="SemiBold" Foreground="#DDDDDD"/>
+                                                                </Border>
+                                                            </StackPanel>
                                                             <TextBlock Text="{Binding Timestamp, StringFormat={}{0:t}}" FontSize="11" Foreground="#888888" Margin="8,2,0,0" VerticalAlignment="Bottom"/>
                                                         </StackPanel>
                                                         <Border Background="#252525" CornerRadius="0,12,12,12" Padding="12,8" HorizontalAlignment="Left">
                                                             <StackPanel>
-                                                                <TextBlock helpers:Markdown.Text="{Binding Content}" TextWrapping="Wrap" Foreground="#E0E0E0" FontSize="14" LineHeight="20"/>
-                                                                <Image Source="{Binding ImageUrl}" MaxWidth="300" MaxHeight="300" Margin="0,8,0,0" Stretch="Uniform">
-                                                                    <Image.Style>
-                                                                        <Style TargetType="Image">
+                                                                <Button Click="JumpToReply_Click" CommandParameter="{Binding}" Background="Transparent" BorderThickness="0" Padding="0" HorizontalAlignment="Left">
+                                                                    <Button.Style>
+                                                                        <Style TargetType="Button">
                                                                             <Setter Property="Visibility" Value="Visible"/>
                                                                             <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding ImageUrl}" Value="{x:Null}">
-                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                                                </DataTrigger>
-                                                                                <DataTrigger Binding="{Binding ImageUrl}" Value="">
+                                                                                <DataTrigger Binding="{Binding ReplyPreview}" Value="{x:Null}">
                                                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                                                 </DataTrigger>
                                                                             </Style.Triggers>
                                                                         </Style>
-                                                                    </Image.Style>
-                                                                </Image>
+                                                                    </Button.Style>
+                                                                    <Border Background="#1A1A1A" CornerRadius="8" Padding="8,4" Margin="0,0,0,8">
+                                                                        <StackPanel Orientation="Horizontal">
+                                                                            <TextBlock Text="↩" Foreground="#AAAAAA" FontSize="12" Margin="0,0,6,0"/>
+                                                                            <TextBlock Text="{Binding ReplyPreview}" Foreground="#CCCCCC" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                                                        </StackPanel>
+                                                                    </Border>
+                                                                </Button>
+                                                                <TextBlock helpers:Markdown.Text="{Binding Content}" TextWrapping="Wrap" Foreground="#E0E0E0" FontSize="14" LineHeight="20" FontFamily="Segoe UI, Segoe UI Emoji"/>
+
+                                                                <ItemsControl ItemsSource="{Binding ReactionBadges}" Margin="0,8,0,0">
+                                                                    <ItemsControl.ItemsPanel>
+                                                                        <ItemsPanelTemplate>
+                                                                            <WrapPanel />
+                                                                        </ItemsPanelTemplate>
+                                                                    </ItemsControl.ItemsPanel>
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate>
+                                                                            <Border Background="#1A1A1A" CornerRadius="10" Padding="8,3" Margin="0,0,6,6">
+                                                                                <StackPanel Orientation="Horizontal">
+                                                                                    <TextBlock Text="{Binding Emoji}" FontFamily="Segoe UI, Segoe UI Emoji"/>
+                                                                                    <TextBlock Text="{Binding Count}" Foreground="#CCCCCC" FontSize="12" Margin="6,0,0,0"/>
+                                                                                </StackPanel>
+                                                                            </Border>
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                    <ItemsControl.Style>
+                                                                        <Style TargetType="ItemsControl">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ReactionBadges}" Value="{x:Null}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ItemsControl.Style>
+                                                                </ItemsControl>
+
+                                                                <ItemsControl ItemsSource="{Binding EmojiImageUrls}" Margin="0,8,0,0">
+                                                                    <ItemsControl.ItemsPanel>
+                                                                        <ItemsPanelTemplate>
+                                                                            <WrapPanel />
+                                                                        </ItemsPanelTemplate>
+                                                                    </ItemsControl.ItemsPanel>
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate>
+                                                                            <Image Source="{Binding}" Width="22" Height="22" Margin="0,0,6,6" Stretch="Uniform" />
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                    <ItemsControl.Style>
+                                                                        <Style TargetType="ItemsControl">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding EmojiImageUrls}" Value="{x:Null}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ItemsControl.Style>
+                                                                </ItemsControl>
+                                                                <ItemsControl ItemsSource="{Binding ImageUrls}" Margin="0,8,0,0">
+                                                                    <ItemsControl.ItemsPanel>
+                                                                        <ItemsPanelTemplate>
+                                                                            <WrapPanel />
+                                                                        </ItemsPanelTemplate>
+                                                                    </ItemsControl.ItemsPanel>
+                                                                    <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate>
+                                                                            <Image Source="{Binding}" MaxWidth="300" MaxHeight="300" Margin="0,0,8,8" Stretch="Uniform" />
+                                                                        </DataTemplate>
+                                                                    </ItemsControl.ItemTemplate>
+                                                                    <ItemsControl.Style>
+                                                                        <Style TargetType="ItemsControl">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ImageUrls}" Value="{x:Null}">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </ItemsControl.Style>
+                                                                </ItemsControl>
                                                             </StackPanel>
                                                         </Border>
                                                     </StackPanel>
@@ -462,7 +595,7 @@
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>
                                 </ScrollViewer>
-                                <Border Grid.Row="1" Margin="12,0,12,12" Padding="10,4" Background="#141414" CornerRadius="30" Visibility="{Binding IsTypingIndicatorVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Border Grid.Row="2" Margin="12,0,12,12" Padding="10,4" Background="#141414" CornerRadius="30" Visibility="{Binding IsTypingIndicatorVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <TextBlock Text="{Binding TypingIndicator}" Foreground="#DDDDDD" FontStyle="Italic" FontSize="12"/>
                                 </Border>
                             </Grid>
@@ -483,13 +616,56 @@
                             <StackPanel>
                                 <TextBlock Text="Participants" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" Foreground="#CCCCCC"/>
                                 <ListBox ItemsSource="{Binding Participants}" Background="Transparent" BorderThickness="0" ScrollViewer.HorizontalScrollBarVisibility="Disabled" Padding="0" Height="400">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="VerticalContentAlignment" Value="Center"/>
+                                            <Setter Property="Padding" Value="10,8"/>
+                                            <Setter Property="Margin" Value="0,0,0,8"/>
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="BorderBrush" Value="Transparent"/>
+                                            <Setter Property="BorderThickness" Value="0"/>
+                                            <Setter Property="Cursor" Value="Hand"/>
+                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <Border x:Name="Bd"
+                                                                Background="{TemplateBinding Background}"
+                                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                                Padding="{TemplateBinding Padding}"
+                                                                CornerRadius="8"
+                                                                Margin="{TemplateBinding Margin}">
+                                                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                                                              SnapsToDevicePixels="true"/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="Bd" Property="Background" Value="#1AFFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderBrush" Value="#22FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderThickness" Value="1"/>
+                                                            </Trigger>
+                                                            <Trigger Property="IsSelected" Value="True">
+                                                                <Setter TargetName="Bd" Property="Background" Value="#33FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderBrush" Value="#33FFFFFF"/>
+                                                                <Setter TargetName="Bd" Property="BorderThickness" Value="1"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Margin="0,0,0,8" Background="Transparent">
+                                            <Grid Background="Transparent">
                                                 <Grid.ContextMenu>
                                                     <ContextMenu>
                                                         <MenuItem Header="Go to Profile" Command="{Binding GoToProfileCommand}" />
                                                         <MenuItem Header="Message" Command="{Binding DataContext.SelectConversationCommand, RelativeSource={RelativeSource AncestorType=Window}}" CommandParameter="{Binding}" />
+                                                        <MenuItem Header="Vote Kick" Click="VoteKick_Click" CommandParameter="{Binding}" />
                                                     </ContextMenu>
                                                 </Grid.ContextMenu>
                                                 <Grid.ColumnDefinitions>
@@ -510,8 +686,18 @@
                                                 </Border>
                                                 
                                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                                    <TextBlock Text="{Binding Username}" FontWeight="SemiBold" FontSize="13" Foreground="#F0F0F0"/>
-                                                    <TextBlock Text="{Binding UserId}" FontSize="10" Foreground="#888888" />
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding DisplayLabel}" FontWeight="SemiBold" FontSize="13" Foreground="#F0F0F0" FontFamily="Segoe UI, Segoe UI Emoji" TextTrimming="CharacterEllipsis"/>
+                                                        <Border Grid.Column="1" Margin="8,0,0,0" Padding="6,1" CornerRadius="8" Background="#2B2B2B"
+                                                                Visibility="{Binding IsOwner, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                                VerticalAlignment="Center">
+                                                            <TextBlock Text="OWNER" FontSize="10" FontWeight="SemiBold" Foreground="#DDDDDD"/>
+                                                        </Border>
+                                                    </Grid>
                                                 </StackPanel>
                                                 
                                                 <Border Grid.Column="2" Background="#2B2B2B" CornerRadius="10" Padding="8,2" Visibility="{Binding IsTyping, Converter={StaticResource BooleanToVisibilityConverter}}" VerticalAlignment="Center">
@@ -704,23 +890,63 @@
                             </Style>
                         </Border.Style>
                         <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox Name="MessageInput"
-                                     Text="{Binding OutgoingMessage, UpdateSourceTrigger=PropertyChanged}"
-                                     AcceptsReturn="True"
-                                     Height="50"
-                                     VerticalScrollBarVisibility="Auto"
-                                     TextWrapping="Wrap"
-                                     TextChanged="MessageInput_TextChanged" 
-                                     PreviewKeyDown="MessageInput_PreviewKeyDown"
-                                     BorderThickness="0"
-                                     Background="Transparent"
-                                     VerticalContentAlignment="Center"
-                                     Padding="0"/>
-                            <Button Grid.Column="1" Content="Send" Width="80" Margin="12,0,0,0" Background="{StaticResource PrimaryBrush}" BorderBrush="#B0B0B0" Foreground="#0A0A0A" Click="Send_Click" Height="40" VerticalAlignment="Bottom">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Border Grid.Row="0" Background="#1A1A1A" CornerRadius="10" Padding="10,6" Margin="0,0,0,8"
+                                    Visibility="{Binding IsReplying, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding ReplyPreview}" Foreground="#CCCCCC" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                    <Button Grid.Column="1" Content="✕" Width="28" Height="24" Padding="0" Margin="10,0,0,0" Background="#333333" BorderBrush="#555555" Click="CancelComposerContext_Click"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Row="0" Background="#1A1A1A" CornerRadius="10" Padding="10,6" Margin="0,0,0,8"
+                                    Visibility="{Binding IsEditing, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding EditingPreview}" Foreground="#CCCCCC" FontSize="12" TextTrimming="CharacterEllipsis"/>
+                                    <Button Grid.Column="1" Content="✕" Width="28" Height="24" Padding="0" Margin="10,0,0,0" Background="#333333" BorderBrush="#555555" Click="CancelComposerContext_Click"/>
+                                </Grid>
+                            </Border>
+
+                            <Grid Grid.Row="1">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Button Grid.Column="0" Content="+" Width="32" Height="32" Margin="0,0,12,0" Padding="0" Background="#333333" BorderBrush="#555555" Click="OpenAssetInsertMenu_Click" ToolTip="Insert decal / emoji asset prefix" VerticalAlignment="Bottom">
+                                    <Button.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Insert decal (rbxassetid://)" Click="PrefillRbxassetId_Click"/>
+                                            <MenuItem Header="Insert emoji decal (emoji://)" Click="PrefillEmojiAssetId_Click"/>
+                                        </ContextMenu>
+                                    </Button.ContextMenu>
+                                </Button>
+                                <TextBox Name="MessageInput"
+                                         Grid.Column="1"
+                                         Text="{Binding OutgoingMessage, UpdateSourceTrigger=PropertyChanged}"
+                                         AcceptsReturn="True"
+                                         Height="50"
+                                         VerticalScrollBarVisibility="Auto"
+                                         TextWrapping="Wrap"
+                                         TextChanged="MessageInput_TextChanged" 
+                                         PreviewKeyDown="MessageInput_PreviewKeyDown"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         VerticalContentAlignment="Center"
+                                         Padding="0"/>
+                                <Button Grid.Column="2" Content="Send" Width="80" Margin="12,0,0,0" Background="{StaticResource PrimaryBrush}" BorderBrush="#B0B0B0" Foreground="#0A0A0A" Click="Send_Click" Height="40" VerticalAlignment="Bottom">
                                 <Button.Template>
                                     <ControlTemplate TargetType="Button">
                                         <Border CornerRadius="20" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
@@ -728,7 +954,8 @@
                                         </Border>
                                     </ControlTemplate>
                                 </Button.Template>
-                            </Button>
+                                </Button>
+                            </Grid>
                         </Grid>
                     </Border>
 

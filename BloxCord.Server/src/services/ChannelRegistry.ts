@@ -3,13 +3,13 @@ import { ChannelRecord, ChannelParticipant } from '../models/ChannelRecord';
 export class ChannelRegistry {
     private channels: Map<string, ChannelRecord> = new Map();
 
-    public createOrGetChannel(jobId: string, username: string, userId?: number, avatarUrl?: string, placeId?: number): ChannelRecord {
+    public createOrGetChannel(jobId: string, username: string, userId?: number, avatarUrl?: string, placeId?: number, meta?: { countryCode?: string; preferredLanguage?: string; dmPublicKey?: string }): ChannelRecord {
         let channel = this.channels.get(jobId);
         if (!channel) {
             channel = new ChannelRecord(jobId, username, userId, avatarUrl, placeId);
             this.channels.set(jobId, channel);
         }
-        channel.addParticipant(username, userId, avatarUrl);
+        channel.addParticipant(username, userId, avatarUrl, meta);
         return channel;
     }
 

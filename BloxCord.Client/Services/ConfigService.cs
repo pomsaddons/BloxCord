@@ -11,6 +11,15 @@ public class AppConfig
     public string SolidColor { get; set; } = "#0F172A";
     public string GradientStart { get; set; } = "#0F172A";
     public string GradientEnd { get; set; } = "#334155";
+
+    public List<string> MutedConversations { get; set; } = new();
+
+    public string CountryCode { get; set; } = string.Empty;
+    public string PreferredLanguage { get; set; } = string.Empty;
+
+    public string UserToken { get; set; } = string.Empty;
+
+    public bool EnableE2eeDirectMessages { get; set; } = false;
 }
 
 public static class ConfigService
